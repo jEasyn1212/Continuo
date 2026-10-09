@@ -1,6 +1,6 @@
 use crate::{
     adapters::{LaunchRequest, Registry},
-    crypto,
+    crypto, identity,
     model::KINDS,
     store::Store,
     sync::{self, SyncBackend},
@@ -144,6 +144,10 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
             false,
             false,
         ),
+        op("identity.inspect", "Inspect a portable identity and check capability/MCP bindings without deploying them", json!({"id":string}), &["id"], false, false, false),
+        op("identity.current", "Read device-local current identity, its selection revision and availability", json!({}), &[], false, false, false),
+        op("identity.activate", "Select a live identity on this device with optimistic identity and selection revisions", json!({"id":string,"expected_revision":string,"expected_selection_revision":string}), &["id","expected_revision","expected_selection_revision"], true, false, false),
+        op("identity.clear", "Clear device-local current identity using its selection revision", json!({"expected_selection_revision":string}), &["expected_selection_revision"], true, false, false),
         op(
             "agent.list",
             "Describe registered agent adapters and their limits",
@@ -156,7 +160,7 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op(
             "agent.prepare",
             "Prepare argv and environment without starting an agent or editing native config",
-            json!({"agent":agent,"cwd":string,"prompt":string,"native_session_id":string,"identity_id":string}),
+            json!({"agent":agent,"cwd":string,"prompt":string,"native_session_id":string,"identity_id":string,"use_current_identity":{"type":"boolean"}}),
             &["agent", "cwd"],
             false,
             false,
@@ -288,28 +292,30 @@ impl Service {
                     )?,
                 )?)
             }
+            "identity.inspect" => identity::inspect(&self.store, text("id")?),
+            "identity.current" => identity::current(&self.store),
+            "identity.activate" => identity::select(
+                &self.store,
+                text("expected_selection_revision")?,
+                Some((text("id")?, text("expected_revision")?)),
+            ),
+            "identity.clear" => {
+                identity::select(&self.store, text("expected_selection_revision")?, None)
+            }
             "agent.list" => Ok(json!({"adapters":self.registry.list()})),
             "agent.prepare" => {
-                let instructions =
-                    if let Some(id) = params.get("identity_id").and_then(Value::as_str) {
-                        let view = self.store.get(id)?;
-                        if view.kind != "identity" || view.conflicted || view.heads[0].deleted {
-                            return Err(Error::new(
-                                "invalid_identity",
-                                "Choose a live identity without unresolved conflicts",
-                            ));
-                        }
-                        Some(
-                            view.heads[0]
-                                .data
-                                .get("instructions")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_owned(),
-                        )
-                    } else {
-                        None
-                    };
+                let context = identity::launch_context(
+                    &self.store,
+                    params.get("identity_id").and_then(Value::as_str),
+                    params
+                        .get("use_current_identity")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                )?;
+                let instructions = context
+                    .as_ref()
+                    .and_then(|c| c["profile"]["instructions"].as_str())
+                    .map(str::to_owned);
                 let request = LaunchRequest {
                     cwd: text("cwd")?.into(),
                     prompt: params
@@ -322,12 +328,21 @@ impl Service {
                         .map(str::to_owned),
                     identity_instructions: instructions,
                 };
-                Ok(serde_json::to_value(
+                let mut plan = serde_json::to_value(
                     self.registry
                         .get(text("agent")?)?
                         .prepare_launch(&request)?,
-                )?)
+                )?;
+                if context
+                    .as_ref()
+                    .is_some_and(|c| !c["bindings"].as_array().unwrap().is_empty())
+                {
+                    plan["warnings"].as_array_mut().unwrap().push(json!("Capability and MCP bindings are context records; native configuration is not installed by this plan."));
+                }
+                plan["identity_context"] = context.unwrap_or(Value::Null);
+                Ok(plan)
             }
+
             "agent.mcp_registration" => {
                 if params
                     .get("allow_sync")

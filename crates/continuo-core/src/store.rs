@@ -121,7 +121,10 @@ impl Store {
     }
     pub fn create(&self, kind: &str, name: &str, data: Value) -> Result<EntityView> {
         let event = self.new_event(Uuid::new_v4().to_string(), kind, name, data, false, vec![])?;
-        self.import_events(&[event.clone()])?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        crate::identity::validate_local(self, &event)?;
+        self.insert(&event)?;
+        tx.commit()?;
         self.get(&event.entity_id)
     }
     pub fn update(
@@ -150,6 +153,7 @@ impl Store {
             deleted,
             vec![expected.into()],
         )?;
+        crate::identity::validate_local(self, &event)?;
         self.insert(&event)?;
         tx.commit()?;
         self.get(id)
@@ -183,6 +187,7 @@ impl Store {
             deleted,
             expected.to_vec(),
         )?;
+        crate::identity::validate_local(self, &event)?;
         self.insert(&event)?;
         tx.commit()?;
         self.get(id)

@@ -56,6 +56,9 @@ impl Event {
             }
         }
         reject_credentials(&self.data)?;
+        if self.kind == "identity" {
+            crate::identity::Profile::parse(&self.data)?;
+        }
         if serde_json::to_vec(self)?.len() > 1024 * 1024 {
             return Err(Error::new("input_too_large", "Event exceeds 1 MiB"));
         }

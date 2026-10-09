@@ -747,3 +747,127 @@ footer span {
     line-height: 1.7;
   }
 }
+
+.identity-active {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  padding: 24px 28px;
+  margin-bottom: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #16251f;
+}
+.identity-active h2 {
+  margin: 8px 0;
+  font-size: 22px;
+}
+.identity-active p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin: 0;
+}
+.identity-active button {
+  flex-shrink: 0;
+}
+.identity-search {
+  width: 100%;
+  margin-bottom: 16px;
+}
+.binding-field {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 20px 0;
+  padding: 16px;
+}
+.binding-field legend {
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.binding-field legend small {
+  color: var(--muted);
+  margin-left: 8px;
+}
+.binding-choice {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  margin: 0 !important;
+  cursor: pointer;
+}
+.binding-choice input {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.binding-choice span {
+  font-size: 14px;
+  min-width: 0;
+}
+.binding-choice small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.identity-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.identity-tags span {
+  background: #192b25;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.identity-check {
+  background: #15221f;
+  padding: 18px;
+  border-radius: 12px;
+  margin: 20px 0;
+}
+.identity-check h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+.identity-check p {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.identity-check strong {
+  float: right;
+  color: var(--accent);
+}
+.identity-delete {
+  margin-top: 30px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+button.danger {
+  color: #ffaca0;
+  border-color: #79514d;
+}
+@media (max-width: 700px) {
+  .identity-active {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px;
+  }
+}
+.identity-editor {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}

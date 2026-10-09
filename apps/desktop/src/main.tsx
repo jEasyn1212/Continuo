@@ -11,6 +11,7 @@ import {
   Status,
 } from "./api";
 import "./style.css";
+import { IdentityWorkspace, CurrentIdentity } from "./IdentityWorkspace";
 
 const domains: {
   kind: Kind;
@@ -69,6 +70,10 @@ function App() {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [agentIdentity, setAgentIdentity] = useState("current");
+  const [activeIdentity, setActiveIdentity] = useState<CurrentIdentity | null>(
+    null,
+  );
   const [agent, setAgent] = useState("claude-code");
   const [cwd, setCwd] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -88,17 +93,20 @@ function App() {
   async function refresh() {
     try {
       const nextConnection = await connect();
-      const [nextStatus, nextEntities, nextAdapters] = await Promise.all([
-        call<Status>("system.status"),
-        call<{ entities: Entity[] }>(
-          "entity.list",
-          domain ? { kind: domain.kind } : {},
-        ),
-        call<{ adapters: Adapter[] }>("agent.list"),
-      ]);
+      const [nextStatus, nextEntities, nextAdapters, nextIdentity] =
+        await Promise.all([
+          call<Status>("system.status"),
+          call<{ entities: Entity[] }>(
+            "entity.list",
+            domain ? { kind: domain.kind } : {},
+          ),
+          call<{ adapters: Adapter[] }>("agent.list"),
+          call<CurrentIdentity>("identity.current"),
+        ]);
       setStatus(nextStatus);
       setEntities(nextEntities.entities);
       setAdapters(nextAdapters.adapters);
+      setActiveIdentity(nextIdentity);
       setConnection(nextConnection);
     } catch (error) {
       setConnection(null);
@@ -128,6 +136,16 @@ function App() {
     setError("");
     void refresh().catch((e) => setError(String(e)));
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "agents" || agentIdentity !== "current") return;
+    const preferred = activeIdentity?.context?.identity.data.preferred_agent;
+    if (
+      typeof preferred === "string" &&
+      adapters.some((a) => a.id === preferred)
+    )
+      setAgent(preferred);
+  }, [page, agentIdentity, activeIdentity?.selection.revision]);
 
   function newEntity() {
     setName("");
@@ -401,7 +419,15 @@ function App() {
               </div>
             </>
           )}
-          {domain && (
+          {page === "identity" && connected && (
+            <IdentityWorkspace
+              writable={writable}
+              adapters={adapters}
+              refreshSignal={status}
+              onChange={refresh}
+            />
+          )}
+          {domain && page !== "identity" && (
             <>
               <div className="page-heading">
                 <div>
@@ -595,6 +621,11 @@ function App() {
                         agent,
                         cwd,
                         ...(prompt ? { prompt } : {}),
+                        ...(agentIdentity === "none"
+                          ? { use_current_identity: false }
+                          : agentIdentity !== "current"
+                            ? { identity_id: agentIdentity }
+                            : {}),
                       }),
                     ),
                   );
@@ -610,6 +641,47 @@ function App() {
                     <option value="claude-code">Claude Code</option>
                     <option value="codex">Codex</option>
                     <option value="hermes">Hermes</option>
+                  </select>
+                </label>
+                <label>
+                  工作身份
+                  <select
+                    value={agentIdentity}
+                    onChange={(e) => {
+                      setAgentIdentity(e.target.value);
+                      setPlan(null);
+                      const profile =
+                        e.target.value === "current"
+                          ? activeIdentity?.context?.identity.data
+                          : entities.find((item) => item.id === e.target.value)
+                              ?.heads[0].data;
+                      if (
+                        typeof profile?.preferred_agent === "string" &&
+                        adapters.some((a) => a.id === profile.preferred_agent)
+                      )
+                        setAgent(profile.preferred_agent);
+                    }}
+                  >
+                    <option value="current">
+                      使用本机当前身份 ·{" "}
+                      {activeIdentity?.context?.identity.name ??
+                        (activeIdentity?.state === "unavailable"
+                          ? "不可用"
+                          : "未选择")}
+                    </option>
+                    <option value="none">本次不使用身份</option>
+                    {entities
+                      .filter(
+                        (e) =>
+                          e.kind === "identity" &&
+                          !e.conflicted &&
+                          !e.heads[0].deleted,
+                      )
+                      .map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.heads[0].name}
+                        </option>
+                      ))}
                   </select>
                 </label>
                 <label>
@@ -815,7 +887,7 @@ function App() {
           )}
         </div>
         <footer>
-          Continuo{" "}
+          Continuo 0.2.0{" "}
           <span>本地优先 · 用户自选存储 · App / Web / CLI / MCP 共享核心</span>
         </footer>
       </main>

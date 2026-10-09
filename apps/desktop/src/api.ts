@@ -128,6 +128,10 @@ export async function call<T>(
       revision_conflict: "这条记录已在其他入口更新，请刷新后重新查看版本。",
       permission_denied: "当前入口未获授权执行这个操作。",
       invalid_path: "请输入这台设备上的绝对路径。",
+      selection_conflict: "当前身份已被其他入口切换，请刷新后再选择。",
+      invalid_identity_profile: "请检查身份字段类型和长度，关联记录不能重复。",
+      identity_bindings_unavailable:
+        "关联的能力或 MCP 缺失、已删除或存在冲突。请检查关联并修复。",
       invalid_identity: "请选择没有冲突且仍有效的身份。",
       invalid_task: "请选择没有冲突且仍有效的任务。",
       sync_not_configured: "请先配置同步仓库和加密密钥。",

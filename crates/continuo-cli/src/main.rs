@@ -21,7 +21,7 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("Continuo 0.1.1\n\ncontinuo [--data-dir PATH] status|agents|describe\ncontinuo [--data-dir PATH] call METHOD [--input FILE|-] [--allow-sync]\ncontinuo [--data-dir PATH] mcp [--allow-writes] [--allow-sync] [--allow-admin]\n\nInput is a JSON object; omitted input defaults to {{}}. All API responses are JSON.\nMCP defaults to read-only; --allow-sync and --allow-admin require --allow-writes.\nSecrets and existing agent configurations are not imported.");
+        println!("Continuo {}\n\ncontinuo [--data-dir PATH] status|agents|describe\ncontinuo [--data-dir PATH] call METHOD [--input FILE|-] [--allow-sync]\ncontinuo [--data-dir PATH] mcp [--allow-writes] [--allow-sync] [--allow-admin]\n\nInput is a JSON object; omitted input defaults to {{}}. All API responses are JSON.\nMCP defaults to read-only; --allow-sync and --allow-admin require --allow-writes.\nSecrets and existing agent configurations are not imported.", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let data_dir = take_value(&mut args, "--data-dir")?

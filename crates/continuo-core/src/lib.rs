@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod api;
 pub mod crypto;
+pub mod identity;
 pub mod model;
 pub mod store;
 pub mod sync;

@@ -218,5 +218,76 @@ test("production HTML and its compiled assets are served independently of Tauri"
   const bootstrap = await fetch(`${server.url}/api/bootstrap`, {
     headers: { "X-Continuo-Client": "web-v1" },
   });
-  assert.equal((await bootstrap.json()).data.server.version, "0.1.1");
+  assert.equal((await bootstrap.json()).data.server.version, "0.2.0");
+});
+
+test("Identity operations cross Web/MCP/CLI with local selection, real bindings and fail-closed preparation", async (t) => {
+  const f = await fixture(t, { writes: true });
+  const cap = (
+    await f.call("entity.create", {
+      kind: "capability",
+      name: "Source rules",
+      data: {},
+    })
+  ).body.data;
+  const profile = (
+    await f.call("entity.create", {
+      kind: "identity",
+      name: "Research",
+      data: {
+        instructions: "Check evidence",
+        capability_ids: [cap.id],
+        preferred_agent: "codex",
+      },
+    })
+  ).body.data;
+  const inspect = (await f.call("identity.inspect", { id: profile.id })).body;
+  assert.equal(inspect.data.ready, true);
+  const current = (await f.call("identity.current")).body.data;
+  const selected = (
+    await f.call("identity.activate", {
+      id: profile.id,
+      expected_revision: profile.heads[0].revision,
+      expected_selection_revision: current.selection.revision,
+    })
+  ).body;
+  assert.equal(selected.ok, true);
+  const cli = spawnSync(
+    binary,
+    ["--data-dir", f.dataDir, "call", "identity.current"],
+    { encoding: "utf8" },
+  );
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(
+    JSON.parse(cli.stdout).data.context.identity.entity_id,
+    profile.id,
+  );
+  const plan = (await f.call("agent.prepare", { agent: "codex", cwd: "/tmp" }))
+    .body;
+  assert.equal(plan.data.identity_context.identity.name, "Research");
+  assert.equal(plan.data.executed, false);
+  const stale = (
+    await f.call("identity.clear", { expected_selection_revision: "none" })
+  ).body;
+  assert.equal(stale.error.code, "selection_conflict");
+  await f.call("entity.delete", {
+    id: cap.id,
+    expected_revision: cap.heads[0].revision,
+  });
+  const broken = (
+    await f.call("agent.prepare", { agent: "codex", cwd: "/tmp" })
+  ).body;
+  assert.equal(broken.error.code, "identity_bindings_unavailable");
+  assert.equal(
+    (await f.call("identity.current")).body.data.state,
+    "unavailable",
+  );
+  const neutral = (
+    await f.call("agent.prepare", {
+      agent: "codex",
+      cwd: "/tmp",
+      use_current_identity: false,
+    })
+  ).body;
+  assert.equal(neutral.data.identity_context, null);
 });
