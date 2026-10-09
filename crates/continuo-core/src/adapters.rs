@@ -29,10 +29,23 @@ pub struct LaunchPlan {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedConfig {
+    pub relative_path: String,
+    pub content: String,
+    /// Values are relative to the generated home; credential files are never copied.
+    pub environment_roots: BTreeMap<String, String>,
+}
 pub trait AgentAdapter: Send + Sync {
     fn descriptor(&self) -> Descriptor;
     fn prepare_launch(&self, request: &LaunchRequest) -> Result<LaunchPlan>;
     fn mcp_registration(&self, executable: &str, args: &[String]) -> Value;
+    fn prepare_managed_config(&self, _registration: &Value) -> Result<ManagedConfig> {
+        Err(Error::new(
+            "managed_config_unsupported",
+            "Adapter has no managed configuration contract",
+        ))
+    }
     fn prepare_resume(&self, _cwd: &str, _native_session_id: &str) -> Result<LaunchPlan> {
         Err(Error::new(
             "session_adapter_unsupported",
@@ -130,7 +143,7 @@ fn descriptor(
         id,
         name,
         executable,
-        capabilities: json!({"launch_plan":true,"native_resume_plan":true,"mcp_stdio_registration":true,"identity_injection":identity,"config_apply":false,"process_execution":false,"internal_state_transfer":false,"runtime_verified":false,"capability_text_context":true,"native_skill_install":false}),
+        capabilities: json!({"launch_plan":true,"native_resume_plan":true,"mcp_stdio_registration":true,"identity_injection":identity,"config_apply":false,"managed_config_plan":true,"managed_config_generation":true,"process_execution":false,"internal_state_transfer":false,"runtime_verified":false,"capability_text_context":true,"native_skill_install":false}),
     }
 }
 fn base(descriptor: &Descriptor, r: &LaunchRequest) -> Result<LaunchPlan> {
@@ -152,6 +165,14 @@ fn base(descriptor: &Descriptor, r: &LaunchRequest) -> Result<LaunchPlan> {
     Ok(LaunchPlan {agent:descriptor.id.into(),executable:descriptor.executable.into(),args:vec![],cwd:r.cwd.clone(),env:BTreeMap::new(),executed:false,warnings:vec!["Plan only: verify the installed runtime version, login and permissions before executing.".into(),"Identity instructions are context, not account switching or security isolation.".into()]})
 }
 impl AgentAdapter for ClaudeCode {
+    fn prepare_managed_config(&self, registration: &Value) -> Result<ManagedConfig> {
+        managed_config(
+            registration,
+            ".claude/.claude.json",
+            "CLAUDE_CONFIG_DIR",
+            ".claude",
+        )
+    }
     fn prepare_resume(&self, cwd: &str, native_session_id: &str) -> Result<LaunchPlan> {
         self.prepare_launch(&LaunchRequest {
             cwd: cwd.into(),
@@ -210,6 +231,9 @@ impl AgentAdapter for ClaudeCode {
     }
 }
 impl AgentAdapter for Codex {
+    fn prepare_managed_config(&self, registration: &Value) -> Result<ManagedConfig> {
+        managed_config(registration, ".codex/config.toml", "CODEX_HOME", ".codex")
+    }
     fn prepare_resume(&self, cwd: &str, native_session_id: &str) -> Result<LaunchPlan> {
         self.prepare_launch(&LaunchRequest {
             cwd: cwd.into(),
@@ -275,6 +299,14 @@ impl AgentAdapter for Codex {
     }
 }
 impl AgentAdapter for Hermes {
+    fn prepare_managed_config(&self, registration: &Value) -> Result<ManagedConfig> {
+        managed_config(
+            registration,
+            ".hermes/config.yaml",
+            "HERMES_HOME",
+            ".hermes",
+        )
+    }
     fn prepare_resume(&self, cwd: &str, native_session_id: &str) -> Result<LaunchPlan> {
         self.prepare_launch(&LaunchRequest {
             cwd: cwd.into(),
@@ -358,4 +390,23 @@ fn registration(format: &str, root: &str, key: &str, entry: Value) -> Value {
         serde_json::to_string_pretty(&document).unwrap() + "\n"
     };
     json!({"format":format,"document":document,"native_text":native_text,"runtime_verified":false})
+}
+
+fn managed_config(
+    registration: &Value,
+    path: &str,
+    variable: &str,
+    subdir: &str,
+) -> Result<ManagedConfig> {
+    let content = registration["native_text"]
+        .as_str()
+        .ok_or_else(|| Error::new("managed_config_unsupported", "Missing typed native text"))?;
+    Ok(ManagedConfig {
+        relative_path: path.into(),
+        content: content.into(),
+        environment_roots: BTreeMap::from([
+            ("HOME".into(), ".".into()),
+            (variable.into(), subdir.into()),
+        ]),
+    })
 }

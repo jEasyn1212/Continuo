@@ -1,6 +1,6 @@
 use crate::{
     adapters::{LaunchRequest, Registry},
-    capability, crypto, identity, mcp,
+    capability, crypto, deployment, identity, mcp,
     model::KINDS,
     session,
     store::Store,
@@ -207,6 +207,11 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
             false,
             false,
         ),
+        op("deployment.inspect", "Inspect device-local generated configuration selection and file integrity; no account authentication",json!({"target_agent":agent}),&["target_agent"],false,false,false),
+        op("deployment.plan", "Preview a single MCP native file for a new generated home; never merge personal configuration",json!({"target_agent":agent,"mcp_id":string}),&["target_agent","mcp_id"],false,false,false),
+        op("deployment.apply", "Apply the exact reviewed plan to a new device-local home and CAS-select it; never execute an agent or copy credentials",json!({"target_agent":agent,"mcp_id":string,"expected_revision":string,"plan_digest":string,"confirm_generated_home":{"type":"boolean"}}),&["target_agent","mcp_id","expected_revision","plan_digest","confirm_generated_home"],true,false,true),
+        op("deployment.rollback", "CAS-select a caller-chosen previous complete generated home, retaining files and runtime state; never stop a process",json!({"target_agent":agent,"expected_revision":string,"target_revision":string}),&["target_agent","expected_revision","target_revision"],true,false,true),
+        op("deployment.launch_plan", "Prepare argv and a clean explicit environment for the exact generated home; no execution, login, keychain or project isolation",json!({"target_agent":agent,"expected_revision":string,"cwd":string,"prompt":string}),&["target_agent","expected_revision","cwd"],false,false,false),
         op(
             "session.handoff",
             "Build explicit task context for another agent; never migrate internal state",
@@ -719,6 +724,48 @@ impl Service {
                 crypto::generate_key(Path::new(text("path")?))?;
                 Ok(json!({"created":true,"key_material_returned":false}))
             }
+            "deployment.inspect" => {
+                deployment::inspect(&self.store, self.registry.get(text("target_agent")?)?)
+            }
+            "deployment.plan" => deployment::plan(
+                &self.store,
+                self.registry.get(text("target_agent")?)?,
+                text("mcp_id")?,
+            ),
+            "deployment.apply" => {
+                if params["confirm_generated_home"] != true {
+                    return Err(Error::new(
+                        "deployment_confirmation_required",
+                        "Confirm the exact generated-home plan before applying",
+                    ));
+                }
+                deployment::apply(
+                    &self.store,
+                    self.registry.get(text("target_agent")?)?,
+                    text("mcp_id")?,
+                    text("expected_revision")?,
+                    text("plan_digest")?,
+                )
+            }
+            "deployment.rollback" => deployment::rollback(
+                &self.store,
+                self.registry.get(text("target_agent")?)?,
+                text("expected_revision")?,
+                text("target_revision")?,
+            ),
+            "deployment.launch_plan" => deployment::launch_plan(
+                &self.store,
+                self.registry.get(text("target_agent")?)?,
+                text("expected_revision")?,
+                &LaunchRequest {
+                    cwd: text("cwd")?.into(),
+                    prompt: params
+                        .get("prompt")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    ..LaunchRequest::default()
+                },
+            ),
             "sync.configure" => sync::configure_checked(
                 &self.store,
                 text("remote")?,

@@ -271,6 +271,15 @@ fn unimplemented_resume_contract_fails_explicitly_without_changing_the_product_r
     let mut s = Service::open(&tmp.path().join("vault"), Policy::local_user()).unwrap();
     assert_eq!(s.registry.list().len(), 3);
     s.registry = Registry::new(vec![Box::new(MetadataOnly)]).unwrap();
+    assert_eq!(
+        s.registry
+            .get("fixture-adapter")
+            .unwrap()
+            .prepare_managed_config(&Value::Null)
+            .unwrap_err()
+            .code,
+        "managed_config_unsupported"
+    );
     let (_, _, e) = setup(&s, "fixture-adapter");
     let m = map(&s, &e, tmp.path(), "none", true);
     assert_eq!(s.call("session.resume_plan",json!({"id":e["id"],"expected_revision":e["heads"][0]["revision"],"expected_mapping_revision":m["revision"]})).unwrap_err().code,"session_adapter_unsupported");

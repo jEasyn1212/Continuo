@@ -82,3 +82,9 @@ MCP 使用标准 newline-delimited JSON-RPC stdio，支持协议版本 `2025-11-
 sync.run/preview 可传新的 canonical UUID run_id 和 timeout_ms（100..90000，默认 30000）。sync.inspect 查看状态，sync.job {run_id} 查询作业，sync.cancel {run_id} 取消当前操作。新重试用新 UUID；publication unknown 时重新校验远端再去重。MCP 每进程最多四个并行有界检查/同步 worker，同数据目录同步由文件锁串行，取消走可响应的主循环。
 
 sync.configure 可用 expected_config_revision；sync.set_enabled 必须匹配配置版本。entity.restore {id,expected_revision,source_revision} 从精确单一删除 head 恢复该实体的明确历史活版本；产生新版本，不能擦除 tombstone、跳过并发冲突或恢复运行时秘密。详见 [同步与恢复](sync.md)。
+
+## 受管配置源码阶段
+
+deployment.inspect / plan / launch_plan 为只读；deployment.apply / rollback 需写与 admin。全部来自共享目录，App/Web 接口控制台与 CLI/MCP 可调用。apply 必须提供 mcp_id、target_agent、expected_revision、plan_digest、confirm_generated_home:true；rollback 提供 expected_revision 与明确 target_revision。
+
+仅生成 vault 内的新 home，不接受个人配置路径，不执行程序、不建立认证。源定义/映射变化、文件改动或过期选择阻止计划/投递。rollback 重新选择已有完整 generation，不覆盖文件或迁移会话。详见 [受管投递](managed-deployment.md)。

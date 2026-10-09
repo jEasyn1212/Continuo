@@ -151,7 +151,7 @@ fn key(id: &str) -> String {
 fn probe_key(id: &str) -> String {
     format!("mcp_probe:{id}")
 }
-fn mapping(store: &Store, id: &str) -> Result<Option<Mapping>> {
+pub(crate) fn mapping(store: &Store, id: &str) -> Result<Option<Mapping>> {
     store
         .metadata(&key(id))?
         .map(|s| serde_json::from_str(&s).map_err(Into::into))

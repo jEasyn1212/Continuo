@@ -724,3 +724,95 @@ test("Web synchronization is cancellable through the live MCP bridge and preserv
     "not_attempted",
   );
 });
+
+test("Generated configuration plans and rollback share service authorization across Web/MCP and CLI", async (t) => {
+  const f = await fixture(t, { writes: true, admin: true });
+  const executable = path.join(f.dir, "fixture-never-run");
+  await writeFile(executable, "#!/bin/sh\nexit 3\n", { mode: 0o700 });
+  const create = async (name) => {
+    const e = (
+      await f.call("entity.create", {
+        kind: "mcp",
+        name,
+        data: { transport: "stdio", server_key: name },
+      })
+    ).body.data;
+    assert.equal(
+      (
+        await f.call("mcp.map", {
+          id: e.id,
+          expected_revision: e.heads[0].revision,
+          expected_mapping_revision: "none",
+          mapping: { executable, args: ["literal $(keep)"] },
+        })
+      ).body.ok,
+      true,
+    );
+    return e;
+  };
+  const a = await create("one"),
+    b = await create("two");
+  const apply = async (entity, expected) => {
+    const p = (
+      await f.call("deployment.plan", {
+        target_agent: "codex",
+        mcp_id: entity.id,
+      })
+    ).body.data;
+    return (
+      await f.call("deployment.apply", {
+        target_agent: "codex",
+        mcp_id: entity.id,
+        expected_revision: expected,
+        plan_digest: p.plan_digest,
+        confirm_generated_home: true,
+      })
+    ).body;
+  };
+  const first = await apply(a, "none");
+  assert.equal(first.ok, true);
+  const second = await apply(b, first.data.active.revision);
+  assert.equal(second.ok, true);
+  const restored = (
+    await f.call("deployment.rollback", {
+      target_agent: "codex",
+      expected_revision: second.data.active.revision,
+      target_revision: first.data.active.revision,
+    })
+  ).body;
+  assert.equal(restored.ok, true);
+  assert.equal(restored.data.active.generation, first.data.active.generation);
+  const launch = (
+    await f.call("deployment.launch_plan", {
+      target_agent: "codex",
+      expected_revision: restored.data.active.revision,
+      cwd: f.dir,
+    })
+  ).body.data;
+  assert.equal(launch.executed, false);
+  assert.equal(launch.inherit_env, false);
+  assert.equal(launch.security_isolation, false);
+  const cli = spawnSync(
+    binary,
+    ["--data-dir", f.dataDir, "call", "deployment.inspect", "--input", "-"],
+    { input: JSON.stringify({ target_agent: "codex" }), encoding: "utf8" },
+  );
+  assert.equal(cli.status, 0);
+  assert.equal(
+    JSON.parse(cli.stdout).data.active.revision,
+    restored.data.active.revision,
+  );
+  assert.equal(f.data.permissions.sync, false);
+  assert.equal(f.data.permissions.probes, false);
+  const limited = await fixture(t, { writes: true });
+  assert.equal(
+    (await limited.call("deployment.apply", {})).body.error.code,
+    "permission_denied",
+  );
+  assert.equal(
+    (await limited.call("system.describe")).body.data.operations.some(
+      (op) => op.method === "deployment.apply",
+    ),
+    false,
+  );
+});

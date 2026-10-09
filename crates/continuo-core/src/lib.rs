@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod api;
 pub mod capability;
 pub mod crypto;
+pub mod deployment;
 pub mod identity;
 pub mod mcp;
 pub mod model;
