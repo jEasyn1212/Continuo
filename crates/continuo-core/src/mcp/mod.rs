@@ -44,6 +44,25 @@ fn env_name(s: &str) -> bool {
 }
 impl Profile {
     pub fn parse(data: &Value) -> Result<Self> {
+        if [
+            "command",
+            "executable",
+            "args",
+            "cwd",
+            "env",
+            "env_refs",
+            "mapping",
+            "connection",
+            "probe_result",
+        ]
+        .iter()
+        .any(|key| data.get(key).is_some())
+        {
+            return Err(Error::new(
+                "invalid_mcp_profile",
+                "Device commands, environment and connection state belong in local mappings, not portable definitions",
+            ));
+        }
         let p: Self = serde_json::from_value(data.clone())
             .map_err(|_| Error::new("invalid_mcp_profile", "Invalid MCP field types"))?;
         let mut names = BTreeSet::new();

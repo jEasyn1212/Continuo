@@ -286,6 +286,11 @@ fn encrypted_sync_excludes_paths_mappings_and_probe_results_and_keeps_definition
         json!({"server_key":"x","command_hint":"/Users/private/executable"}),
         json!({"transport":"http","endpoint":"https://user:secret@host/mcp"}),
         json!({"required_env":["BAD=VALUE"]}),
+        json!({"command":"/Users/private/server"}),
+        json!({"args":["/Users/private/config"]}),
+        json!({"env":{"TOKEN_REFERENCE":"env:FIXTURE"}}),
+        json!({"mapping":{"executable":"/Users/private/server"}}),
+        json!({"connection":{"state":"succeeded"}}),
     ] {
         assert!(a
             .call(

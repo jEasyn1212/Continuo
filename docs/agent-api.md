@@ -39,7 +39,7 @@ CLI 默认允许本地记录与管理操作；网络同步仍需 `--allow-sync`�
 
 推荐 agent 流程：查询实体 → 提取 head.revision → 提交明确变更 → 遇到 revision_conflict 重新读取 → 冲突存在时呈现给用户或按用户授权合并 → 显式同步。
 
-实体 `data` 当前为 JSON 对象，更新会整体替换它，所以保留需要的已有字段。常用内容：identity.instructions；task.goal/status/decisions/next_steps/artifact_refs；capability.source/version；mcp.transport/command/credential_refs；session.agent/native_session_id/task_id/identity_id；device.environment_refs。身份字段、能力/MCP 关联、任务结构、状态变化、任务身份与产物引用已有领域校验；其他对象的关系尚未全部校验。身份字段与机器操作流程见 [身份模块](identity.md)。
+实体 `data` 当前为 JSON 对象，更新会整体替换它，所以保留需要的已有字段。常用内容：identity.instructions；task.goal/status/decisions/next_steps/artifact_refs；capability.source/version；mcp.transport/server_key/command_hint/credential_refs；session.agent/native_session_id/task_id/identity_id；device.environment_refs。身份字段、能力/MCP 关联、任务结构、状态变化、任务身份与产物引用已有领域校验；其他对象的关系尚未全部校验。身份字段与机器操作流程见 [身份模块](identity.md)。
 
 `agent.prepare` 默认采用本机当前身份；显式 `identity_id` 优先，`use_current_identity:false` 可在没有显式身份时跳过本机选择。失效的当前身份会报错，不会隐式使用空身份。返回 `identity_context`，包含身份及关联记录的版本快照，能力和 MCP 尚未投递到原生配置。
 

@@ -4,7 +4,7 @@ MCP 工作流依次为：创建可同步定义 → 配置本机命令 → 核对
 
 ## 定义与设备映射
 
-可同步定义保存说明、`server_key`（agent 注册键）、`transport`、不含本机路径的程序提示、HTTPS endpoint、所需环境变量名称和凭据引用。stdio 可用；HTTP 定义可以保存，但连接与注册适配尚未实现，不会假装已连接。旧的空定义仍作为待完善记录保留。
+可同步定义保存说明、`server_key`（agent 注册键）、`transport`、不含本机路径的程序提示、HTTPS endpoint、所需环境变量名称和凭据引用。定义拒绝 command/args/cwd/env、mapping 与连接状态等设备字段，避免把原生配置误存为同步定义。stdio 可用；HTTP 定义可以保存，但连接与注册适配尚未实现，不会假装已连接。旧的空定义仍作为待完善记录保留。
 
 `mcp.map` 保存本机绝对 executable、字面 argv 数组、可选 cwd、`NAME -> env:VARIABLE` 引用。映射存于本地 metadata，不进入同步事件，也不复制给其他设备。保存需要同时匹配定义 revision 和本机 mapping revision。清除映射保留新的本地版本标记，防止旧的“从未配置”请求在清除后覆盖配置。定义删除/冲突不会强行删除本机映射，修复后可继续核对。
 
