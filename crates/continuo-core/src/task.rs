@@ -81,7 +81,7 @@ fn lines(items: &[String]) -> bool {
             .iter()
             .all(|s| !s.trim().is_empty() && bounded(s, 8192))
 }
-fn reference(value: &str) -> bool {
+pub(crate) fn reference(value: &str) -> bool {
     // Portable relative project references or public HTTPS URLs without credentials.
     if value.is_empty() || value.len() > 8192 || value.chars().any(char::is_control) {
         return false;

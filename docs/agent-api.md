@@ -50,3 +50,11 @@ CLI 默认允许本地记录与管理操作；网络同步仍需 `--allow-sync`�
 MCP 使用标准 newline-delimited JSON-RPC stdio，支持协议版本 `2025-11-25`、`2025-06-18`、`2025-03-26`。必须先 initialize，再 notifications/initialized。stdout 仅包含协议消息。应用错误返回 `isError: true`，同时提供文本与 `structuredContent`；协议错误采用 JSON-RPC error。每条输入最大 1 MiB。
 
 协议参考：[MCP 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[工具](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[生命周期](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)。
+
+## 能力操作
+
+`capability.import_text` 接受 `name`、`body`，可选 `capability_type` (`rule`/`skill`)、`version`、`source_ref`、`source_revision`、`source_license`，始终创建未检查记录。完整编辑（含 `agent_targets`、`requires`）仍使用 `entity.update` 的 revision CAS。
+
+`capability.inspect {id, target_agent?}` 返回 `digest`、`capability.revision`、`issues` 与依赖快照。随后 `capability.review {id, expected_revision, expected_digest}` 确认这一版正文；此接口需入口写权限，但不授予运行权限。
+
+`capability.prepare {capability_ids, target_agent}` 返回依赖在前的适配器应用。`agent.prepare` 增加 `capability_ids` 供额外选择，并自动应用身份关联能力；输出 `capability_context` 包含 revision/digest/策略/来源与 `scripts_executed:false`、`permissions_granted:false`、`config_written:false`。缺失、冲突、循环、未检查或不适用时返回结构化 `capability_not_ready`。所有方法经共享操作目录暴露为 CLI/MCP/App/Web 接口。

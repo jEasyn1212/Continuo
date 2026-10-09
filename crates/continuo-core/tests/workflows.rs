@@ -57,6 +57,29 @@ fn adapter_registry_drives_api_schemas_without_storage_changes() {
         .call("agent.prepare", json!({"agent":"codex","cwd":"/tmp"}))
         .is_err());
     assert!(Registry::new(vec![Box::new(Fixture), Box::new(Fixture)]).is_err());
+    // A new adapter must explicitly implement capability application; never silently drop text.
+    let cap = service
+        .store
+        .create(
+            "capability",
+            "fixture content",
+            json!({"body":"Literal fixture instructions"}),
+        )
+        .unwrap();
+    let inspection = service
+        .call("capability.inspect", json!({"id":cap.id}))
+        .unwrap();
+    let cap = service.call("capability.review", json!({"id":cap.id,"expected_revision":cap.heads[0].revision,"expected_digest":inspection["digest"]})).unwrap();
+    assert_eq!(
+        service
+            .call(
+                "agent.prepare",
+                json!({"agent":"fixture","cwd":"/tmp","capability_ids":[cap["id"]]})
+            )
+            .unwrap_err()
+            .code,
+        "capability_unsupported"
+    );
     // Historical session records remain portable even when this device lacks their adapter.
     let record = service
         .store

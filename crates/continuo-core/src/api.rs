@@ -1,6 +1,6 @@
 use crate::{
     adapters::{LaunchRequest, Registry},
-    crypto, identity,
+    capability, crypto, identity,
     model::KINDS,
     store::Store,
     sync::{self, SyncBackend},
@@ -148,6 +148,10 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op("identity.current", "Read device-local current identity, its selection revision and availability", json!({}), &[], false, false, false),
         op("identity.activate", "Select a live identity on this device with optimistic identity and selection revisions", json!({"id":string,"expected_revision":string,"expected_selection_revision":string}), &["id","expected_revision","expected_selection_revision"], true, false, false),
         op("identity.clear", "Clear device-local current identity using its selection revision", json!({"expected_selection_revision":string}), &["expected_selection_revision"], true, false, false),
+        op("capability.inspect", "Inspect text, content digest, provenance, dependency graph and agent applicability without granting permissions", json!({"id":string,"target_agent":agent}), &["id"], false, false, false),
+        op("capability.import_text", "Import caller-supplied rule or skill text as an unreviewed record; no fetching, scripts or native installation", json!({"name":string,"body":string,"capability_type":{"type":"string","enum":["rule","skill"]},"version":string,"source_ref":string,"source_revision":string,"source_license":string}), &["name","body"], true, false, false),
+        op("capability.review", "Acknowledge the exact content digest and revision; grants no runtime permissions", json!({"id":string,"expected_revision":string,"expected_digest":string}), &["id","expected_revision","expected_digest"], true, false, false),
+        op("capability.prepare", "Resolve selected capabilities and dependencies into adapter-specific text applications; no execution or config writes", json!({"capability_ids":{"type":"array","items":{"type":"string"},"maxItems":64},"target_agent":agent}), &["capability_ids","target_agent"], false, false, false),
         op("task.inspect", "Read task context, allowed status transitions and handoff readiness", json!({"id":string}), &["id"], false, false, false),
         op("task.transition", "Move task to an allowed state with a recorded reason; done requires a completion summary", json!({"id":string,"expected_revision":string,"status":{"type":"string","enum":task::STATES},"reason":string}), &["id","expected_revision","status","reason"], true, false, false),
         op("task.progress", "Append a progress entry and user-recorded checks to the exact expected task revision", json!({"id":string,"expected_revision":string,"summary":string,"checks":{"type":"array","items":{"type":"string"},"maxItems":128}}), &["id","expected_revision","summary"], true, false, false),
@@ -166,7 +170,7 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op(
             "agent.prepare",
             "Prepare argv and environment without starting an agent or editing native config",
-            json!({"agent":agent,"cwd":string,"prompt":string,"native_session_id":string,"identity_id":string,"use_current_identity":{"type":"boolean"},"task_id":string,"expected_task_revision":string}),
+            json!({"agent":agent,"cwd":string,"prompt":string,"native_session_id":string,"identity_id":string,"use_current_identity":{"type":"boolean"},"task_id":string,"expected_task_revision":string,"capability_ids":{"type":"array","items":{"type":"string"},"maxItems":64}}),
             &["agent", "cwd"],
             false,
             false,
@@ -264,6 +268,20 @@ impl Service {
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::new("invalid_params", format!("Missing string: {key}")))
         };
+        if ["entity.create", "entity.update", "entity.resolve"].contains(&method) {
+            if let Some(data) = params.get("data") {
+                let is_capability =
+                    params.get("kind").and_then(Value::as_str) == Some("capability")
+                        || params.get("id").and_then(Value::as_str).is_some_and(|id| {
+                            self.store.get(id).is_ok_and(|v| v.kind == "capability")
+                        });
+                if is_capability {
+                    for id in capability::Profile::parse(data)?.agent_targets {
+                        self.registry.get(&id)?;
+                    }
+                }
+            }
+        }
         match method {
             "system.status" => self.store.status(),
             "system.describe" => Ok(json!({"operations":self.available()})),
@@ -307,6 +325,33 @@ impl Service {
             ),
             "identity.clear" => {
                 identity::select(&self.store, text("expected_selection_revision")?, None)
+            }
+            "capability.inspect" => {
+                let target = params.get("target_agent").and_then(Value::as_str);
+                if let Some(id) = target {
+                    self.registry.get(id)?;
+                }
+                capability::inspect(&self.store, text("id")?, target)
+            }
+            "capability.review" => capability::review(
+                &self.store,
+                text("id")?,
+                text("expected_revision")?,
+                text("expected_digest")?,
+            ),
+            "capability.prepare" => {
+                let ids: Vec<String> = serde_json::from_value(params["capability_ids"].clone())?;
+                capability::prepare(&self.store, &ids, self.registry.get(text("target_agent")?)?)
+            }
+            "capability.import_text" => {
+                let mut data = params.clone();
+                data.as_object_mut().unwrap().remove("name");
+                data["reviewed_digest"] = Value::Null;
+                Ok(serde_json::to_value(self.store.create(
+                    "capability",
+                    text("name")?,
+                    data,
+                )?)?)
             }
             "task.inspect" => task::inspect(&self.store, text("id")?),
             "task.transition" | "task.progress" | "task.decision" | "task.artifact" => {
@@ -373,10 +418,40 @@ impl Service {
                     (Some(p), None) => p["prompt"].as_str().map(str::to_owned),
                     (None, extra) => extra.map(str::to_owned),
                 };
-                let instructions = context
+                let mut instructions = context
                     .as_ref()
                     .and_then(|c| c["profile"]["instructions"].as_str())
                     .map(str::to_owned);
+                let mut roots: Vec<String> = context
+                    .as_ref()
+                    .map(|c| serde_json::from_value(c["profile"]["capability_ids"].clone()))
+                    .transpose()?
+                    .unwrap_or_default();
+                let extra: Vec<String> = params
+                    .get("capability_ids")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?
+                    .unwrap_or_default();
+                for id in extra {
+                    if !roots.contains(&id) {
+                        roots.push(id);
+                    }
+                }
+                if roots.len() > 64 {
+                    return Err(Error::new(
+                        "capability_graph_too_large",
+                        "At most 64 root capabilities may be selected",
+                    ));
+                }
+                let applications =
+                    capability::prepare(&self.store, &roots, self.registry.get(text("agent")?)?)?;
+                for application in applications["applications"].as_array().unwrap() {
+                    let text = application["instructions"].as_str().unwrap();
+                    instructions = Some(match instructions {
+                        Some(i) if !i.is_empty() => format!("{i}\n\n{text}"),
+                        _ => text.into(),
+                    });
+                }
                 let request = LaunchRequest {
                     cwd: text("cwd")?.into(),
                     prompt,
@@ -395,8 +470,9 @@ impl Service {
                     .as_ref()
                     .is_some_and(|c| !c["bindings"].as_array().unwrap().is_empty())
                 {
-                    plan["warnings"].as_array_mut().unwrap().push(json!("Capability and MCP bindings are context records; native configuration is not installed by this plan."));
+                    plan["warnings"].as_array_mut().unwrap().push(json!("Capability text is included in argv; MCP bindings and native skill files are not installed by this plan."));
                 }
+                plan["capability_context"] = applications;
                 plan["identity_context"] = context.unwrap_or(Value::Null);
                 plan["task_context"] = packet.unwrap_or(Value::Null);
                 Ok(plan)

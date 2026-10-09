@@ -59,6 +59,9 @@ impl Event {
         if self.kind == "task" {
             crate::task::Profile::parse(&self.data)?;
         }
+        if self.kind == "capability" {
+            crate::capability::Profile::parse(&self.data)?;
+        }
         if self.kind == "identity" {
             crate::identity::Profile::parse(&self.data)?;
         }

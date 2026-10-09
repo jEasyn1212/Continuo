@@ -14,6 +14,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { call, connect, Adapter, Entity, Event as StoredEvent } from "./api";
+import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { IdentityWorkspace } from "./IdentityWorkspace";
 const { startWebServer } = createRequire(path.resolve("package.json"))(
@@ -79,7 +80,7 @@ async function fill(label: string, value: string) {
     fireEvent.change(input, { target: { value } });
   });
 }
-async function click(name: string) {
+async function click(name: string | RegExp) {
   await waitFor(() => {
     const button = screen.getByRole("button", { name });
     expect(button.matches(":disabled")).toBe(false);
@@ -294,11 +295,166 @@ test("Identity forms keep their real capability bindings and device-local select
   expect(all.entities[0].heads[0].data.capability_ids).toEqual([cap.id]);
   expect(all.entities[0].heads[0].data.mcp_ids).toEqual([mcp.id]);
   await click("检查关联");
-  await screen.findByText("指引与关联已就绪");
+  await screen.findByText("指引与关联记录有效");
   await click("清除当前身份");
   await waitFor(async () =>
     expect((await call<{ state: string }>("identity.current")).state).toBe(
       "none",
     ),
   );
+});
+
+test("Capability forms review exact text and produce real adapter plans; editing invalidates review", async () => {
+  render(
+    <CapabilityWorkspace
+      writable
+      adapters={adapters}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  await click("导入文本");
+  await fill("能力名称", "Source checking");
+  await fill("内容版本", "1.0");
+  await fill("能力正文", "Literal $(do-not-run)\nCheck primary evidence.");
+  await fill("来源引用", "project:skills/research/SKILL.md");
+  await fill("来源版本或 commit", "fixture-revision");
+  await fill("来源许可", "MIT");
+  await click("保存能力");
+  await screen.findByText("正文或元信息尚待检查 · Source checking");
+  expect(
+    screen
+      .getByRole("button", { name: "生成能力启动计划" })
+      .matches(":disabled"),
+  ).toBe(true);
+  await click("标记正文已检查");
+  await screen.findByText("当前正文与依赖已检查，可加入启动计划。");
+  await fill("本机工作目录", "/tmp");
+  await click("生成能力启动计划");
+  await screen.findByText(/"capability_context":/);
+  expect(screen.getByText(/"capability_context":/).textContent).toContain(
+    '"permissions_granted": false',
+  );
+  const stored = (
+    await call<{ entities: Entity[] }>("entity.list", { kind: "capability" })
+  ).entities[0];
+  expect(stored.heads[0].data.source_revision).toBe("fixture-revision");
+  await click("编辑能力");
+  await fill("能力正文", "Changed evidence policy");
+  await click("保存能力");
+  await screen.findByText("正文或元信息尚待检查 · Source checking");
+  expect(
+    screen
+      .getByRole("button", { name: "生成能力启动计划" })
+      .matches(":disabled"),
+  ).toBe(true);
+  expect(screen.queryByText(/"capability_context":/)).toBeNull();
+});
+
+test("Capability stale saves preserve drafts; cancel restores inspection and read-only interface cannot review", async () => {
+  const cap = await call<Entity>("entity.create", {
+    kind: "capability",
+    name: "Draft rule",
+    data: { body: "Base rule" },
+  });
+  render(
+    <CapabilityWorkspace
+      writable
+      adapters={adapters}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  await click(/Draft rule/);
+  await screen.findByRole("button", { name: "标记正文已检查" });
+  await click("编辑能力");
+  await fill("能力正文", "My unsaved content");
+  const result = spawnSync(
+    binary,
+    ["--data-dir", dataDir, "call", "entity.update", "--input", "-"],
+    {
+      encoding: "utf8",
+      input: JSON.stringify({
+        id: cap.id,
+        expected_revision: cap.heads[0].revision,
+        data: { body: "External content" },
+      }),
+    },
+  );
+  expect(result.status).toBe(0);
+  await click("保存能力");
+  await screen.findByRole("alert");
+  expect((screen.getByLabelText("能力正文") as HTMLTextAreaElement).value).toBe(
+    "My unsaved content",
+  );
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await click("取消编辑");
+  await screen.findByRole("button", { name: "标记正文已检查" });
+  cleanup();
+  await service.close();
+  service = await startWebServer({
+    binary,
+    assets: path.join(directory, "assets"),
+    dataDir,
+    port: 0,
+    writes: false,
+  });
+  await connect();
+  render(
+    <CapabilityWorkspace
+      writable={false}
+      adapters={adapters}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  await click(/Draft rule/);
+  await screen.findByText("External content");
+  await screen.findByRole("button", { name: "标记正文已检查" });
+  expect(
+    screen.getByRole("button", { name: "编辑能力" }).matches(":disabled"),
+  ).toBe(true);
+  expect(
+    screen.getByRole("button", { name: "标记正文已检查" }).matches(":disabled"),
+  ).toBe(true);
+  await expect(
+    call("capability.review", {
+      id: cap.id,
+      expected_revision: cap.heads[0].revision,
+      expected_digest: "wrong",
+    }),
+  ).rejects.toThrow("未获授权");
+});
+
+test("Capability compatibility is checked in forms against the registered adapters", async () => {
+  const cap = await call<Entity>("entity.create", {
+    kind: "capability",
+    name: "Codex rule",
+    data: { body: "Codex only", agent_targets: ["codex"] },
+  });
+  const inspection = await call<{ digest: string }>("capability.inspect", {
+    id: cap.id,
+  });
+  await call("capability.review", {
+    id: cap.id,
+    expected_revision: cap.heads[0].revision,
+    expected_digest: inspection.digest,
+  });
+  render(
+    <CapabilityWorkspace
+      writable
+      adapters={adapters}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  await click(/Codex rule/);
+  await screen.findByText("不适用于当前 agent · Codex rule");
+  expect(
+    screen
+      .getByRole("button", { name: "生成能力启动计划" })
+      .matches(":disabled"),
+  ).toBe(true);
+  await fill("检查目标 agent", "codex");
+  await screen.findByText("当前正文与依赖已检查，可加入启动计划。");
 });

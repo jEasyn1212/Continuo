@@ -133,6 +133,16 @@ export async function call<T>(
       identity_bindings_unavailable:
         "关联的能力或 MCP 缺失、已删除或存在冲突。请检查关联并修复。",
       invalid_identity: "请选择没有冲突且仍有效的身份。",
+      invalid_capability_profile:
+        "请检查能力正文、版本、来源与依赖字段。来源使用不含凭据或查询参数的 HTTPS 地址或 project:相对路径。",
+      capability_unavailable: "能力已删除、类型错误或存在并发版本，请先修复。",
+      capability_not_ready:
+        "能力或依赖尚待检查、缺失、存在冲突或不适用于当前 agent，请在能力模块处理后重试。",
+      capability_dependency_cycle: "能力依赖形成循环，请取消循环关联。",
+      capability_dependency_unavailable:
+        "依赖能力缺失、已删除或有冲突，请清除关联或先修复依赖。",
+      capability_graph_too_large: "能力依赖图或合并正文过大，请减少本次选择。",
+      capability_unsupported: "当前适配器尚未支持能力应用。",
       invalid_task_profile:
         "任务字段、状态或产物引用不符合要求。受阻需填写阻碍，完成需填写结论；产物使用 project:相对路径或不含凭据、查询参数的 HTTPS 地址。",
       invalid_task_identity:

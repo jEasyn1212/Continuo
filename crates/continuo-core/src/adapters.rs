@@ -33,6 +33,16 @@ pub trait AgentAdapter: Send + Sync {
     fn descriptor(&self) -> Descriptor;
     fn prepare_launch(&self, request: &LaunchRequest) -> Result<LaunchPlan>;
     fn mcp_registration(&self, executable: &str, args: &[String]) -> Value;
+    fn prepare_capability(
+        &self,
+        _event: &crate::model::Event,
+        _profile: &crate::capability::Profile,
+    ) -> Result<Value> {
+        Err(Error::new(
+            "capability_unsupported",
+            "This adapter does not implement capability application",
+        ))
+    }
 }
 
 /// Explicit registry: adding an agent never changes domain storage or API routing.
@@ -102,7 +112,7 @@ fn descriptor(
         id,
         name,
         executable,
-        capabilities: json!({"launch_plan":true,"native_resume_plan":true,"mcp_stdio_registration":true,"identity_injection":identity,"config_apply":false,"process_execution":false,"internal_state_transfer":false,"runtime_verified":false}),
+        capabilities: json!({"launch_plan":true,"native_resume_plan":true,"mcp_stdio_registration":true,"identity_injection":identity,"config_apply":false,"process_execution":false,"internal_state_transfer":false,"runtime_verified":false,"capability_text_context":true,"native_skill_install":false}),
     }
 }
 fn base(descriptor: &Descriptor, r: &LaunchRequest) -> Result<LaunchPlan> {
@@ -124,6 +134,17 @@ fn base(descriptor: &Descriptor, r: &LaunchRequest) -> Result<LaunchPlan> {
     Ok(LaunchPlan {agent:descriptor.id.into(),executable:descriptor.executable.into(),args:vec![],cwd:r.cwd.clone(),env:BTreeMap::new(),executed:false,warnings:vec!["Plan only: verify the installed runtime version, login and permissions before executing.".into(),"Identity instructions are context, not account switching or security isolation.".into()]})
 }
 impl AgentAdapter for ClaudeCode {
+    fn prepare_capability(
+        &self,
+        event: &crate::model::Event,
+        profile: &crate::capability::Profile,
+    ) -> Result<Value> {
+        Ok(capability_application(
+            event,
+            profile,
+            "append_system_prompt",
+        ))
+    }
     fn descriptor(&self) -> Descriptor {
         descriptor(
             "claude-code",
@@ -151,6 +172,17 @@ impl AgentAdapter for ClaudeCode {
     }
 }
 impl AgentAdapter for Codex {
+    fn prepare_capability(
+        &self,
+        event: &crate::model::Event,
+        profile: &crate::capability::Profile,
+    ) -> Result<Value> {
+        Ok(capability_application(
+            event,
+            profile,
+            "developer_instructions_override",
+        ))
+    }
     fn descriptor(&self) -> Descriptor {
         descriptor("codex", "Codex", "codex", "developer_instructions_override")
     }
@@ -185,6 +217,13 @@ impl AgentAdapter for Codex {
     }
 }
 impl AgentAdapter for Hermes {
+    fn prepare_capability(
+        &self,
+        event: &crate::model::Event,
+        profile: &crate::capability::Profile,
+    ) -> Result<Value> {
+        Ok(capability_application(event, profile, "initial_prompt"))
+    }
     fn descriptor(&self) -> Descriptor {
         descriptor("hermes", "Hermes", "hermes", "initial_prompt")
     }
@@ -214,4 +253,12 @@ impl AgentAdapter for Hermes {
     fn mcp_registration(&self, executable: &str, args: &[String]) -> Value {
         json!({"format":"yaml","document":{"mcp_servers":{"continuo":{"command":executable,"args":args,"enabled":true}}}})
     }
+}
+
+fn capability_application(
+    event: &crate::model::Event,
+    p: &crate::capability::Profile,
+    strategy: &str,
+) -> Value {
+    json!({"id":event.entity_id,"revision":event.revision,"name":event.name,"version":p.version,"capability_type":p.capability_type,"digest":p.reviewed_digest,"source_ref":p.source_ref,"source_revision":p.source_revision,"source_license":p.source_license,"strategy":strategy,"instructions":format!("Capability: {} [{} / {}]\n{}",event.name,p.capability_type,p.version,p.body),"permissions_granted":false,"scripts_executed":false})
 }

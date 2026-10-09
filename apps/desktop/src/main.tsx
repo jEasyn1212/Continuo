@@ -11,6 +11,7 @@ import {
   Status,
 } from "./api";
 import "./style.css";
+import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { IdentityWorkspace, CurrentIdentity } from "./IdentityWorkspace";
 
@@ -72,6 +73,7 @@ function App() {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [agentCapabilities, setAgentCapabilities] = useState<string[]>([]);
   const [agentIdentity, setAgentIdentity] = useState("current");
   const [activeIdentity, setActiveIdentity] = useState<CurrentIdentity | null>(
     null,
@@ -446,168 +448,185 @@ function App() {
               onDirtyChange={setHasUnsaved}
             />
           )}
-          {domain && page !== "identity" && page !== "task" && (
-            <>
-              <div className="page-heading">
-                <div>
-                  <div className="eyebrow">WORKSPACE / {domain.mark}</div>
-                  <h1>{domain.label}</h1>
-                  <p>{domain.description}</p>
+          {page === "capability" && connected && (
+            <CapabilityWorkspace
+              writable={writable}
+              adapters={adapters}
+              refreshSignal={status}
+              onChange={refresh}
+              onDirtyChange={setHasUnsaved}
+            />
+          )}
+          {domain &&
+            page !== "identity" &&
+            page !== "task" &&
+            page !== "capability" && (
+              <>
+                <div className="page-heading">
+                  <div>
+                    <div className="eyebrow">WORKSPACE / {domain.mark}</div>
+                    <h1>{domain.label}</h1>
+                    <p>{domain.description}</p>
+                  </div>
+                  <button
+                    className="primary"
+                    disabled={!writable || busy}
+                    onClick={newEntity}
+                  >
+                    ＋ 新建{domain.label}
+                  </button>
                 </div>
-                <button
-                  className="primary"
-                  disabled={!writable || busy}
-                  onClick={newEntity}
-                >
-                  ＋ 新建{domain.label}
-                </button>
-              </div>
-              <div className="entity-workspace">
-                <section className="entity-list">
-                  <h2>
-                    全部{domain.label}
-                    <span>{entities.length}</span>
-                  </h2>
-                  {entities.length === 0 && (
-                    <div className="empty">
-                      <span>◇</span>
-                      <h3>从第一条{domain.label}开始</h3>
-                      <p>创建后保存在本机，配置同步后可以带到其他设备。</p>
-                    </div>
-                  )}
-                  {entities.map((e) => (
-                    <button
-                      className={
-                        selected === e.id ? "entity selected" : "entity"
-                      }
-                      key={e.id}
-                      onClick={() => {
-                        setSelected(e.id);
-                        setEditing(false);
-                      }}
-                    >
-                      <strong>{e.heads[0].name}</strong>
-                      <small>
-                        {e.conflicted ? "需要解决冲突" : "已保存到本机"}
-                      </small>
-                    </button>
-                  ))}
-                </section>
-                <section className="detail">
-                  {editing ? (
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        void action(save);
-                      }}
-                    >
-                      <h2>
-                        {current ? "编辑" : "新建"}
-                        {domain.label}
-                      </h2>
-                      <label>
-                        名称
-                        <input
-                          autoFocus
-                          required
-                          value={name}
-                          onChange={(e) => setName(e.target.value)}
-                          maxLength={200}
-                        />
-                      </label>
-                      <label>
-                        {domain.kind === "identity"
-                          ? "身份指引"
-                          : "说明与工作记录"}
-                        <textarea
-                          value={description}
-                          onChange={(e) => setDescription(e.target.value)}
-                          rows={9}
-                        />
-                      </label>
-                      <p className="help">
-                        记录明确的上下文和凭据引用。登录凭据单独保存在设备上。
-                      </p>
-                      <div className="form-actions">
-                        <button type="button" onClick={() => setEditing(false)}>
-                          取消
-                        </button>
-                        <button
-                          className="primary"
-                          disabled={busy || !writable || !name.trim()}
-                        >
-                          保存到本机
-                        </button>
+                <div className="entity-workspace">
+                  <section className="entity-list">
+                    <h2>
+                      全部{domain.label}
+                      <span>{entities.length}</span>
+                    </h2>
+                    {entities.length === 0 && (
+                      <div className="empty">
+                        <span>◇</span>
+                        <h3>从第一条{domain.label}开始</h3>
+                        <p>创建后保存在本机，配置同步后可以带到其他设备。</p>
                       </div>
-                    </form>
-                  ) : current ? (
-                    <>
-                      <div className="detail-title">
-                        <h2>{current.heads[0].name}</h2>
-                        {!current.conflicted && (
-                          <button onClick={editEntity} disabled={!writable}>
-                            编辑
+                    )}
+                    {entities.map((e) => (
+                      <button
+                        className={
+                          selected === e.id ? "entity selected" : "entity"
+                        }
+                        key={e.id}
+                        onClick={() => {
+                          setSelected(e.id);
+                          setEditing(false);
+                        }}
+                      >
+                        <strong>{e.heads[0].name}</strong>
+                        <small>
+                          {e.conflicted ? "需要解决冲突" : "已保存到本机"}
+                        </small>
+                      </button>
+                    ))}
+                  </section>
+                  <section className="detail">
+                    {editing ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void action(save);
+                        }}
+                      >
+                        <h2>
+                          {current ? "编辑" : "新建"}
+                          {domain.label}
+                        </h2>
+                        <label>
+                          名称
+                          <input
+                            autoFocus
+                            required
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            maxLength={200}
+                          />
+                        </label>
+                        <label>
+                          {domain.kind === "identity"
+                            ? "身份指引"
+                            : "说明与工作记录"}
+                          <textarea
+                            value={description}
+                            onChange={(e) => setDescription(e.target.value)}
+                            rows={9}
+                          />
+                        </label>
+                        <p className="help">
+                          记录明确的上下文和凭据引用。登录凭据单独保存在设备上。
+                        </p>
+                        <div className="form-actions">
+                          <button
+                            type="button"
+                            onClick={() => setEditing(false)}
+                          >
+                            取消
                           </button>
-                        )}
-                      </div>
-                      {current.conflicted && (
-                        <div className="notice">
-                          不同设备产生了多个版本。选择保留的版本，或通过 agent
-                          接口提交合并后的内容。
+                          <button
+                            className="primary"
+                            disabled={busy || !writable || !name.trim()}
+                          >
+                            保存到本机
+                          </button>
                         </div>
-                      )}
-                      {current.heads.map((head, index) => (
-                        <article className="version" key={head.revision}>
-                          <small>
-                            {current.conflicted ? `版本 ${index + 1} · ` : ""}
-                            {new Date(head.timestamp_ms).toLocaleString()}{" "}
-                            {head.deleted ? "· 已删除" : ""}
-                          </small>
-                          <p className="body-text">
-                            {String(
-                              head.data.instructions ??
-                                head.data.description ??
-                                "暂无说明",
-                            )}
-                          </p>
-                          {current.conflicted && (
-                            <button
-                              disabled={busy || !writable}
-                              onClick={() =>
-                                void action(async () => {
-                                  await call("entity.resolve", {
-                                    id: current.id,
-                                    expected_heads: current.heads.map(
-                                      (h) => h.revision,
-                                    ),
-                                    name: head.name,
-                                    data: head.data,
-                                    deleted: head.deleted,
-                                  });
-                                })
-                              }
-                            >
-                              保留这个版本
+                      </form>
+                    ) : current ? (
+                      <>
+                        <div className="detail-title">
+                          <h2>{current.heads[0].name}</h2>
+                          {!current.conflicted && (
+                            <button onClick={editEntity} disabled={!writable}>
+                              编辑
                             </button>
                           )}
-                        </article>
-                      ))}
-                      <details>
-                        <summary>查看完整记录</summary>
-                        <pre>{JSON.stringify(current, null, 2)}</pre>
-                      </details>
-                    </>
-                  ) : (
-                    <div className="empty">
-                      <span>↖</span>
-                      <h3>选择一条{domain.label}</h3>
-                      <p>在这里查看内容与版本。</p>
-                    </div>
-                  )}
-                </section>
-              </div>
-            </>
-          )}
+                        </div>
+                        {current.conflicted && (
+                          <div className="notice">
+                            不同设备产生了多个版本。选择保留的版本，或通过 agent
+                            接口提交合并后的内容。
+                          </div>
+                        )}
+                        {current.heads.map((head, index) => (
+                          <article className="version" key={head.revision}>
+                            <small>
+                              {current.conflicted ? `版本 ${index + 1} · ` : ""}
+                              {new Date(
+                                head.timestamp_ms,
+                              ).toLocaleString()}{" "}
+                              {head.deleted ? "· 已删除" : ""}
+                            </small>
+                            <p className="body-text">
+                              {String(
+                                head.data.instructions ??
+                                  head.data.description ??
+                                  "暂无说明",
+                              )}
+                            </p>
+                            {current.conflicted && (
+                              <button
+                                disabled={busy || !writable}
+                                onClick={() =>
+                                  void action(async () => {
+                                    await call("entity.resolve", {
+                                      id: current.id,
+                                      expected_heads: current.heads.map(
+                                        (h) => h.revision,
+                                      ),
+                                      name: head.name,
+                                      data: head.data,
+                                      deleted: head.deleted,
+                                    });
+                                  })
+                                }
+                              >
+                                保留这个版本
+                              </button>
+                            )}
+                          </article>
+                        ))}
+                        <details>
+                          <summary>查看完整记录</summary>
+                          <pre>{JSON.stringify(current, null, 2)}</pre>
+                        </details>
+                      </>
+                    ) : (
+                      <div className="empty">
+                        <span>↖</span>
+                        <h3>选择一条{domain.label}</h3>
+                        <p>在这里查看内容与版本。</p>
+                      </div>
+                    )}
+                  </section>
+                </div>
+              </>
+            )}
           {page === "agents" && (
             <>
               <div className="page-heading">
@@ -639,6 +658,7 @@ function App() {
                       await call("agent.prepare", {
                         agent,
                         cwd,
+                        capability_ids: agentCapabilities,
                         ...(prompt ? { prompt } : {}),
                         ...(agentIdentity === "none"
                           ? { use_current_identity: false }
@@ -655,7 +675,10 @@ function App() {
                   Agent
                   <select
                     value={agent}
-                    onChange={(e) => setAgent(e.target.value)}
+                    onChange={(e) => {
+                      setAgent(e.target.value);
+                      setPlan(null);
+                    }}
                   >
                     <option value="claude-code">Claude Code</option>
                     <option value="codex">Codex</option>
@@ -703,20 +726,85 @@ function App() {
                       ))}
                   </select>
                 </label>
+                <fieldset className="binding-field">
+                  <legend>本次额外能力</legend>
+                  <p className="help">
+                    身份绑定的能力自动加入；这里可以追加选择。生成时会检查正文、依赖与适用性。
+                  </p>
+                  {entities
+                    .filter(
+                      (e) =>
+                        e.kind === "capability" &&
+                        !e.conflicted &&
+                        !e.heads[0].deleted,
+                    )
+                    .map((e) => (
+                      <label className="binding-choice" key={e.id}>
+                        <input
+                          type="checkbox"
+                          checked={agentCapabilities.includes(e.id)}
+                          onChange={() => {
+                            setAgentCapabilities((ids) =>
+                              ids.includes(e.id)
+                                ? ids.filter((id) => id !== e.id)
+                                : [...ids, e.id],
+                            );
+                            setPlan(null);
+                          }}
+                        />
+                        <span>{e.heads[0].name}</span>
+                      </label>
+                    ))}
+                  {agentCapabilities
+                    .filter(
+                      (id) =>
+                        !entities.some(
+                          (e) =>
+                            e.id === id &&
+                            e.kind === "capability" &&
+                            !e.conflicted &&
+                            !e.heads[0].deleted,
+                        ),
+                    )
+                    .map((id) => (
+                      <label className="binding-choice" key={id}>
+                        <input
+                          type="checkbox"
+                          checked
+                          onChange={() => {
+                            setAgentCapabilities((ids) =>
+                              ids.filter((value) => value !== id),
+                            );
+                            setPlan(null);
+                          }}
+                        />
+                        <span>
+                          失效或冲突的额外能力
+                          <small>{id} · 取消选择或在能力模块修复</small>
+                        </span>
+                      </label>
+                    ))}
+                </fieldset>
                 <label>
                   本机工作目录
                   <input
                     required
                     placeholder="绝对路径"
                     value={cwd}
-                    onChange={(e) => setCwd(e.target.value)}
+                    onChange={(e) => {
+                      setCwd(e.target.value);
+                      setPlan(null);
+                    }}
                   />
                 </label>
                 <label>
                   开始时的工作指令
                   <textarea
                     value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
+                    onChange={(e) => {
+                      setPrompt(e.target.value);
+                      setPlan(null);
+                    }}
                     rows={3}
                   />
                 </label>
@@ -906,7 +994,7 @@ function App() {
           )}
         </div>
         <footer>
-          Continuo 0.3.0{" "}
+          Continuo 0.4.0{" "}
           <span>本地优先 · 用户自选存储 · App / Web / CLI / MCP 共享核心</span>
         </footer>
       </main>

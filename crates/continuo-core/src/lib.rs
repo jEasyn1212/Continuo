@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod api;
+pub mod capability;
 pub mod crypto;
 pub mod identity;
 pub mod model;

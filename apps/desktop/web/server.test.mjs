@@ -221,16 +221,25 @@ test("production HTML and its compiled assets are served independently of Tauri"
   const bootstrap = await fetch(`${server.url}/api/bootstrap`, {
     headers: { "X-Continuo-Client": "web-v1" },
   });
-  assert.equal((await bootstrap.json()).data.server.version, "0.3.0");
+  assert.equal((await bootstrap.json()).data.server.version, "0.4.0");
 });
 
 test("Identity operations cross Web/MCP/CLI with local selection, real bindings and fail-closed preparation", async (t) => {
   const f = await fixture(t, { writes: true });
-  const cap = (
+  let cap = (
     await f.call("entity.create", {
       kind: "capability",
       name: "Source rules",
-      data: {},
+      data: { body: "Check primary sources" },
+    })
+  ).body.data;
+  const capInspect = (await f.call("capability.inspect", { id: cap.id })).body
+    .data;
+  cap = (
+    await f.call("capability.review", {
+      id: cap.id,
+      expected_revision: cap.heads[0].revision,
+      expected_digest: capInspect.digest,
     })
   ).body.data;
   const profile = (
@@ -402,5 +411,75 @@ test("Task workflow persists progress, decisions and artifacts through MCP; hand
     (await f.call("task.handoff", { task_id: task.id, target_agent: "codex" }))
       .body.error.code,
     "task_not_ready",
+  );
+});
+
+test("Capability text import and review travel through Web/MCP; CLI reads provenance and plans block changed content", async (t) => {
+  const f = await fixture(t, { writes: true });
+  let cap = (
+    await f.call("capability.import_text", {
+      name: "Evidence skill",
+      body: "Use primary sources",
+      capability_type: "skill",
+      source_ref: "project:skills/evidence/SKILL.md",
+      source_license: "MIT",
+    })
+  ).body.data;
+  assert.equal(
+    (
+      await f.call("agent.prepare", {
+        agent: "codex",
+        cwd: "/tmp",
+        use_current_identity: false,
+        capability_ids: [cap.id],
+      })
+    ).body.error.code,
+    "capability_not_ready",
+  );
+  const inspection = (
+    await f.call("capability.inspect", { id: cap.id, target_agent: "codex" })
+  ).body.data;
+  cap = (
+    await f.call("capability.review", {
+      id: cap.id,
+      expected_revision: cap.heads[0].revision,
+      expected_digest: inspection.digest,
+    })
+  ).body.data;
+  const plan = (
+    await f.call("agent.prepare", {
+      agent: "codex",
+      cwd: "/tmp",
+      use_current_identity: false,
+      capability_ids: [cap.id],
+    })
+  ).body.data;
+  assert.equal(
+    plan.capability_context.applications[0].revision,
+    cap.heads[0].revision,
+  );
+  assert.equal(plan.capability_context.permissions_granted, false);
+  const cli = spawnSync(
+    binary,
+    ["--data-dir", f.dataDir, "call", "capability.inspect", "--input", "-"],
+    { input: JSON.stringify({ id: cap.id }), encoding: "utf8" },
+  );
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(JSON.parse(cli.stdout).data.profile.source_license, "MIT");
+  await f.call("entity.update", {
+    id: cap.id,
+    expected_revision: cap.heads[0].revision,
+    data: { ...cap.heads[0].data, body: "Updated content" },
+  });
+  assert.equal(
+    (
+      await f.call("agent.prepare", {
+        agent: "codex",
+        cwd: "/tmp",
+        use_current_identity: false,
+        capability_ids: [cap.id],
+      })
+    ).body.error.code,
+    "capability_not_ready",
   );
 });

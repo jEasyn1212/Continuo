@@ -973,3 +973,38 @@ button.danger {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.capability-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.capability-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.capability-body {
+  font-family: ui-monospace, monospace;
+  line-height: 1.6;
+}
+.capability-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.capability-source {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 18px 0;
+  overflow-wrap: anywhere;
+}
+.capability-source p {
+  font-size: 13px;
+}
+@media (max-width: 700px) {
+  .capability-pair {
+    grid-template-columns: 1fr;
+  }
+}

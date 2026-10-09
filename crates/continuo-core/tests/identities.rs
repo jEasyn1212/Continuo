@@ -22,8 +22,12 @@ fn identity_profiles_bind_real_records_and_drive_all_adapter_plans() {
         &s,
         "capability",
         "Research rules",
-        json!({"description":"Check sources"}),
+        json!({"description":"Check sources","body":"Use verified primary sources."}),
     );
+    let inspected_cap = s
+        .call("capability.inspect", json!({"id":capability["id"]}))
+        .unwrap();
+    s.call("capability.review", json!({"id":capability["id"],"expected_revision":capability["heads"][0]["revision"],"expected_digest":inspected_cap["digest"]})).unwrap();
     let mcp = create(
         &s,
         "mcp",
@@ -65,8 +69,10 @@ fn identity_profiles_bind_real_records_and_drive_all_adapter_plans() {
                 .find_map(|a| a.strip_prefix("developer_instructions="))
                 .unwrap();
             assert_eq!(
-                serde_json::from_str::<String>(encoded).unwrap(),
-                instructions
+                serde_json::from_str::<String>(encoded)
+                    .unwrap()
+                    .contains(instructions),
+                true
             );
         } else {
             assert!(args

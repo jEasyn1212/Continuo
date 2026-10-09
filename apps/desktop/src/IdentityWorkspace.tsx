@@ -508,7 +508,9 @@ export function IdentityWorkspace({
               {inspection && (
                 <div className="identity-check">
                   <h3>
-                    {inspection.ready ? "指引与关联已就绪" : "部分关联需要修复"}
+                    {inspection.ready
+                      ? "指引与关联记录有效"
+                      : "部分关联需要修复"}
                   </h3>
                   {inspection.bindings.length === 0 ? (
                     <p>这个身份暂未关联能力或 MCP。</p>
@@ -521,7 +523,7 @@ export function IdentityWorkspace({
                           {
                             (
                               {
-                                ready: "就绪",
+                                ready: "记录有效",
                                 missing: "缺失",
                                 deleted: "已删除",
                                 conflicted: "存在冲突",
@@ -534,7 +536,8 @@ export function IdentityWorkspace({
                     ))
                   )}
                   <p className="help">
-                    启动计划会包含关联记录的版本快照。原生工具配置仍需独立安装。
+                    生成计划时会进一步检查能力正文、依赖与 agent 适用性。MCP
+                    和原生 skill 文件尚未安装。
                   </p>
                 </div>
               )}
