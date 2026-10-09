@@ -18,7 +18,7 @@ npm run test:web
 npm run app:build
 ```
 
-App 产物为 `apps/desktop/src-tauri/target/release/bundle/macos/Continuo.app`。这是本机生成的开发包，未完成面向公众的 Developer ID 签名、公证或安装器发布。本地构建针对当前 CPU 架构；Mini 的 arm64 包不可视为所有 Air 都兼容。
+App 产物为 `apps/desktop/src-tauri/target/release/bundle/macos/Continuo.app`。构建脚本会用 `codesign --sign -` 生成并验证本地 ad-hoc 签名，不使用个人证书或 keychain 身份。这是本机生成的开发包，未完成面向公众的 Developer ID 签名、公证或安装器发布。本地构建针对当前 CPU 架构；Mini 的 arm64 包不可视为所有 Air 都兼容。
 
 ## 打开两个入口
 

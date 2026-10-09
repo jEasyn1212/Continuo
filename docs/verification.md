@@ -24,7 +24,7 @@
 - 保留十项 Rust 核心/CLI/MCP 集成测试通过。
 - `npm run test:web`：三项 Web 集成测试通过（含真实 HTTP → MCP → Rust 与生产资产提供）；涵盖创建/修改/删除、CLI 共享持久化、过期版本、三种适配器、任务材料接续、只读权限与接口目录。
 - Web 拒绝错误 token、跨 Origin、Origin:null、非法 Host、静态文件路径/软链接越界、错误 JSON、超大请求与参数提权。
-- TypeScript/Vite 与 Prettier 检查通过；`npm run app:build` 在 Mini 构建了 0.1.1 macOS arm64 `.app`（约 10.57 MiB）。JS API 与 Rust Tauri 均锁定为 2.11 小版本系列。
+- TypeScript/Vite 与 Prettier 检查通过；`npm run app:build` 在 Mini 构建了 0.1.1 macOS arm64 `.app`（约 10.57 MiB）。JS API 与 Rust Tauri 均锁定为 2.11 小版本系列。最初 Tauri bundle 的签名校验失败；随后增加本地 ad-hoc 签名与严格验证，不使用个人证书。
 - 使用隔离 `.local-demo` 在 Mini 启动本机 Web 服务与 App 进程；普通沙箱中的 App 进程立即退出，沙箱外启动使用同一演示目录。原生界面读取未返回有效状态，被中止；没有确认 App/Web 实际显示。浏览器工具没有可用浏览器入口。
 - 41e9e04 的远端 main 与四项 CI 已只读确认全部通过；0.1.1 的 CI 结果以本次交付链接为准。
 
