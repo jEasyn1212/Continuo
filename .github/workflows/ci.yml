@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -27,6 +28,9 @@ jobs:
       - run: npm ci && npm run build
         working-directory: apps/desktop
       - run: npm run format:check
+        working-directory: apps/desktop
+      - run: cargo build -p continuo-cli --locked
+      - run: npm run test:web
         working-directory: apps/desktop
   desktop-native:
     runs-on: macos-latest
@@ -41,3 +45,5 @@ jobs:
       - run: npm ci && npm run build
         working-directory: apps/desktop
       - run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --locked
+      - run: npm run app:build
+        working-directory: apps/desktop

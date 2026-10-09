@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Adapter, call, desktopAvailable, Entity, Kind, Status } from "./api";
+import {
+  Adapter,
+  call,
+  connect,
+  Connection,
+  desktopAvailable,
+  Entity,
+  Kind,
+  Status,
+} from "./api";
 import "./style.css";
 
 const domains: {
@@ -46,9 +55,10 @@ const domains: {
     description: "记录设备与环境，映射各自的执行位置。",
   },
 ];
-type Page = "overview" | Kind | "agents" | "sync";
+type Page = "overview" | Kind | "agents" | "sync" | "api";
 
 function App() {
+  const [connection, setConnection] = useState<Connection | null>(null);
   const [page, setPage] = useState<Page>("overview");
   const [status, setStatus] = useState<Status | null>(null);
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -66,23 +76,40 @@ function App() {
   const [remote, setRemote] = useState("");
   const [keyFile, setKeyFile] = useState("");
   const [syncResult, setSyncResult] = useState<unknown>(null);
+  const [apiMethod, setApiMethod] = useState("system.status");
+  const [apiInput, setApiInput] = useState("{}");
+  const [apiResult, setApiResult] = useState<unknown>(null);
+  const selectedTool = connection?.tools?.find(
+    (tool) => tool.name === `continuo_${apiMethod.replaceAll(".", "_")}`,
+  );
   const domain = domains.find((d) => d.kind === page);
   const current = entities.find((e) => e.id === selected);
 
   async function refresh() {
-    if (!desktopAvailable) return;
-    const [nextStatus, nextEntities, nextAdapters] = await Promise.all([
-      call<Status>("system.status"),
-      call<{ entities: Entity[] }>(
-        "entity.list",
-        domain ? { kind: domain.kind } : {},
-      ),
-      call<{ adapters: Adapter[] }>("agent.list"),
-    ]);
-    setStatus(nextStatus);
-    setEntities(nextEntities.entities);
-    setAdapters(nextAdapters.adapters);
+    try {
+      const nextConnection = await connect();
+      const [nextStatus, nextEntities, nextAdapters] = await Promise.all([
+        call<Status>("system.status"),
+        call<{ entities: Entity[] }>(
+          "entity.list",
+          domain ? { kind: domain.kind } : {},
+        ),
+        call<{ adapters: Adapter[] }>("agent.list"),
+      ]);
+      setStatus(nextStatus);
+      setEntities(nextEntities.entities);
+      setAdapters(nextAdapters.adapters);
+      setConnection(nextConnection);
+    } catch (error) {
+      setConnection(null);
+      setStatus(null);
+      setEntities([]);
+      setAdapters([]);
+      throw error;
+    }
   }
+  const connected = connection !== null;
+  const writable = connected && connection.permissions.writes;
   async function action(fn: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -172,7 +199,11 @@ function App() {
           <div>
             本地工作空间
             <small>
-              {desktopAvailable ? "数据保存在当前设备" : "界面预览"}
+              {connected
+                ? connection.mode === "app"
+                  ? "App · 已连接本机核心"
+                  : "Web · 已连接本机核心"
+                : "等待本机连接"}
             </small>
           </div>
         </div>
@@ -208,10 +239,16 @@ function App() {
           >
             <span>⇄</span>跨设备同步
           </button>
+          <button
+            className={page === "api" ? "active" : ""}
+            onClick={() => setPage("api")}
+          >
+            <span>⌘</span>接口控制台
+          </button>
         </nav>
         <div className="sidebar-foot">
           <span className="pill">本地优先</span>
-          <small>0.1 · 开发预览</small>
+          <small>0.1.1 · App / Web</small>
         </div>
       </aside>
       <main>
@@ -224,20 +261,49 @@ function App() {
                   overview: "概览",
                   agents: "Agent 适配",
                   sync: "跨设备同步",
+                  api: "接口控制台",
                 } as Record<string, string>
               )[page]}
           </span>
-          <button
-            disabled={busy || !desktopAvailable}
-            onClick={() => void action(refresh)}
-          >
+          <button disabled={busy} onClick={() => void action(refresh)}>
             刷新状态 ↻
           </button>
         </header>
         <div className="content">
-          {!desktopAvailable && (
-            <div className="notice">
-              当前为界面预览。通过桌面应用打开后，可以管理本地数据；这里未展示模拟数据。
+          {!desktopAvailable && !connected && (
+            <div className="notice" role="status">
+              <strong>连接本机 Continuo Web</strong>
+              <p>
+                在项目根目录构建 CLI，在 apps/desktop
+                中构建页面并启动本机服务。然后打开终端显示的
+                http://127.0.0.1:1421。
+              </p>
+              <pre>
+                {
+                  "cargo build -p continuo-cli\ncd apps/desktop\nnpm ci && npm run build\nnpm run web -- --allow-writes --allow-admin"
+                }
+              </pre>
+              <p>
+                普通浏览器通过本机服务读写数据；App 使用原生接口。直接打开 HTML
+                文件或仅运行 Vite 不会连接数据。
+              </p>
+              <button onClick={() => void action(refresh)} disabled={busy}>
+                重新连接 ↻
+              </button>
+            </div>
+          )}
+          {connection?.mode === "web" && (
+            <div className="notice" role="status">
+              Web 已连接当前设备 ·{" "}
+              {connection.permissions.writes ? "可写入" : "只读"} ·{" "}
+              {connection.permissions.admin ? "可管理配置" : "管理未授权"} ·{" "}
+              {connection.permissions.sync ? "同步已授权" : "同步未授权"}
+              {!connection.permissions.writes && (
+                <p>
+                  需要编辑时，以 --allow-writes 重启本机服务；管理配置另加
+                  --allow-admin，同步另加 --allow-sync。
+                </p>
+              )}
             </div>
           )}
           {error && (
@@ -259,7 +325,7 @@ function App() {
                 </p>
                 <button
                   className="primary"
-                  disabled={!desktopAvailable}
+                  disabled={!connected}
                   onClick={() => {
                     setPage("identity");
                   }}
@@ -313,7 +379,7 @@ function App() {
                   <p>
                     {status
                       ? `${status.event_count} 条版本记录`
-                      : "等待桌面连接"}
+                      : "等待本机连接"}
                   </p>
                 </div>
                 <div>
@@ -345,7 +411,7 @@ function App() {
                 </div>
                 <button
                   className="primary"
-                  disabled={!desktopAvailable || busy}
+                  disabled={!writable || busy}
                   onClick={newEntity}
                 >
                   ＋ 新建{domain.label}
@@ -423,7 +489,7 @@ function App() {
                         </button>
                         <button
                           className="primary"
-                          disabled={busy || !name.trim()}
+                          disabled={busy || !writable || !name.trim()}
                         >
                           保存到本机
                         </button>
@@ -434,7 +500,9 @@ function App() {
                       <div className="detail-title">
                         <h2>{current.heads[0].name}</h2>
                         {!current.conflicted && (
-                          <button onClick={editEntity}>编辑</button>
+                          <button onClick={editEntity} disabled={!writable}>
+                            编辑
+                          </button>
                         )}
                       </div>
                       {current.conflicted && (
@@ -459,7 +527,7 @@ function App() {
                           </p>
                           {current.conflicted && (
                             <button
-                              disabled={busy}
+                              disabled={busy || !writable}
                               onClick={() =>
                                 void action(async () => {
                                   await call("entity.resolve", {
@@ -508,14 +576,7 @@ function App() {
                 </div>
               </div>
               <div className="adapter-grid">
-                {(adapters.length
-                  ? adapters
-                  : [
-                      { id: "claude-code", name: "Claude Code" },
-                      { id: "codex", name: "Codex" },
-                      { id: "hermes", name: "Hermes" },
-                    ]
-                ).map((a) => (
+                {adapters.map((a) => (
                   <article className="adapter-card" key={a.id}>
                     <span className="pill">启动计划</span>
                     <h2>{a.name}</h2>
@@ -568,16 +629,99 @@ function App() {
                     rows={3}
                   />
                 </label>
-                <button
-                  className="primary"
-                  disabled={busy || !desktopAvailable}
-                >
+                <button className="primary" disabled={busy || !connected}>
                   生成计划
                 </button>
                 <p className="help">
                   当前只生成计划，不启动进程或改写原生配置。
                 </p>
                 {plan != null && <pre>{JSON.stringify(plan, null, 2)}</pre>}
+              </form>
+            </>
+          )}
+          {page === "api" && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">SHARED OPERATIONS</div>
+                  <h1>每个入口，同一套接口。</h1>
+                  <p>
+                    这里列出当前入口获授权的操作，与 agent 的 MCP
+                    工具共享业务核心。输入真实参数，结果保存在当前设备。
+                  </p>
+                </div>
+              </div>
+              <form
+                className="settings-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void action(async () => {
+                    const params: unknown = JSON.parse(apiInput);
+                    if (
+                      !params ||
+                      typeof params !== "object" ||
+                      Array.isArray(params)
+                    )
+                      throw new Error("参数必须是 JSON 对象。");
+                    setApiResult(
+                      await call(apiMethod, params as Record<string, unknown>),
+                    );
+                  });
+                }}
+              >
+                <h2>调用接口</h2>
+                <label>
+                  操作
+                  <select
+                    value={apiMethod}
+                    onChange={(e) => {
+                      setApiMethod(e.target.value);
+                      setApiInput("{}");
+                      setApiResult(null);
+                    }}
+                  >
+                    {connection?.tools?.map((tool) => {
+                      const method = tool.name.replace(
+                        /^continuo_([a-z]+)_/,
+                        "$1.",
+                      );
+                      return (
+                        <option key={tool.name} value={method}>
+                          {method}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <p className="help">{selectedTool?.description}</p>
+                <label>
+                  JSON 参数
+                  <textarea
+                    rows={8}
+                    value={apiInput}
+                    onChange={(e) => setApiInput(e.target.value)}
+                    spellCheck={false}
+                  />
+                </label>
+                <button
+                  className="primary"
+                  disabled={busy || !connected || !selectedTool}
+                >
+                  调用 {apiMethod}
+                </button>
+                {selectedTool && (
+                  <details>
+                    <summary>查看参数格式</summary>
+                    <pre>
+                      {JSON.stringify(selectedTool.inputSchema, null, 2)}
+                    </pre>
+                  </details>
+                )}
+                {apiResult !== null && (
+                  <pre aria-label="接口结果">
+                    {JSON.stringify(apiResult, null, 2)}
+                  </pre>
+                )}
               </form>
             </>
           )}
@@ -643,12 +787,16 @@ function App() {
                   身份验证使用本机已有的 Git 认证。密钥不上传到仓库。
                 </p>
                 <div className="form-actions">
-                  <button disabled={busy || !desktopAvailable}>保存配置</button>
+                  <button disabled={busy || !connection?.permissions.admin}>
+                    保存配置
+                  </button>
                   <button
                     className="primary"
                     type="button"
                     disabled={
-                      busy || !desktopAvailable || !status?.sync_configured
+                      busy ||
+                      !connection?.permissions.sync ||
+                      !status?.sync_configured
                     }
                     onClick={() =>
                       void action(async () =>
@@ -668,7 +816,7 @@ function App() {
         </div>
         <footer>
           Continuo{" "}
-          <span>本地优先 · 用户自选存储 · CLI / MCP / 桌面端共享核心</span>
+          <span>本地优先 · 用户自选存储 · App / Web / CLI / MCP 共享核心</span>
         </footer>
       </main>
     </div>

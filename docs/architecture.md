@@ -4,7 +4,10 @@
 flowchart TD
     CLI[CLI] --> S[应用服务与接口目录]
     MCP[MCP stdio] --> S
-    UI[React / Tauri] --> S
+    UI[共享 React 界面] --> T[Tauri 原生桥接]
+    UI --> W[127.0.0.1 Web 本机桥接]
+    T --> S
+    W --> MCP
     S --> P[入口权限与输入校验]
     P --> E[领域事件与本地 SQLite]
     P --> R[AgentAdapter 注册表]
@@ -15,7 +18,7 @@ flowchart TD
     G --> U[用户自己的 GitHub 仓库]
 ```
 
-`Service::call` 是共同业务入口。`operations()` 保存方法名称、JSON 输入 schema、读写/网络/管理标记和 MCP 工具名称。所有入口复用它，不重复实现业务规则。输出统一为 `{api_version, ok, data|error}`，错误具有稳定的 `code`，必要时包含结构化 `details`。
+`Service::call` 是共同业务入口。`operations()` 保存方法名称、JSON 输入 schema、读写/网络/管理标记和 MCP 工具名称。所有入口复用它，不重复实现业务规则。`system.describe` 返回当前入口获授权的目录，App/Web 接口控制台从它或 MCP tools/list 生成操作列表。输出统一为 `{api_version, ok, data|error}`，错误具有稳定的 `code`，必要时包含结构化 `details`。
 
 本地记录由不可变事件构成。一个事件引用之前的父版本；没有被后继事件引用的版本为当前 head。一个实体有多个 head 时存在冲突。`update` 要求调用者提供唯一当前版本，`resolve` 要求提供全部当前版本。SQLite 事务将新事件一次提交，派生视图可以从事件重建。
 
@@ -33,6 +36,10 @@ flowchart TD
 
 当前 Claude Code 身份材料使用 append-system-prompt 参数；Codex 使用 developer_instructions 覆盖；Hermes 使用初始用户消息。它们的语义有差异，描述中明确声明。当前计划基于官方文档和本机 CLI/source 核对，未执行真实会话。原生恢复也只准备本机参数，不说明远端状态已迁移。
 
-Tauri 桥接在 blocking worker 上调用服务。桌面、CLI 与 MCP 默认使用同一个数据目录，也可以显式指定。不存在公共 HTTP API 或 Continuo 同步服务。
+Tauri 桥接在 blocking worker 上调用服务。桌面、CLI 与 MCP 默认使用同一个数据目录，也可以显式指定。Web 同一套页面采用同源 HTTP → MCP stdio → Service::call；Node 桥接仅提供静态资产和协议传输，不实现领域规则。它只监听 127.0.0.1，不提供公共 HTTP API 或 Continuo 同步服务。
 
 同步当前通过 `SyncBackend` 的实验性 Git 实现。新增第二种存储前，需将读取远端快照、发布事件和条件提交细化为传输契约，保持加密、因果合并和冲突处理在共同引擎中。
+
+Web 启动时创建一次性内存 token；页面从同源 bootstrap 获取它，API 请求携带 Authorization 和固定客户端头。服务检查 Host、Origin、内容类型、请求大小与静态文件真实路径；不开放 CORS。权限在启动 MCP 子进程时指定，所有操作仍经过 Rust 服务校验。token 不放入 URL、日志或浏览器持久存储。该边界防止跨站浏览器请求，不隔离拥有本机访问权限的其他进程。
+
+Web 的资产和本机桥接可在没有 Tauri App 的情况下独立使用，需要 Node、CLI 二进制与构建后的 HTML/CSS/JS；App 不需要 Node 或 Web 服务才能运行。当前尚未提供自动安装、后台托管和签名分发工作流。

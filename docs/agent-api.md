@@ -4,6 +4,7 @@
 
 | 方法 | 用途 | 权限 |
 | --- | --- | --- |
+| system.describe | 当前入口获授权的方法、参数 schema 与权限标记 | 读 |
 | system.status | 设备、数量、冲突与同步状态 | 读 |
 | entity.list / entity.get | 查询六种实体与全部当前版本 | 读 |
 | entity.create | 创建记录 | 写 |
@@ -20,7 +21,9 @@
 
 MCP 默认只读，由用户配置 `--allow-writes`、`--allow-sync`、`--allow-admin`。后两者需要写权限。请求参数不能修改入口权限。配置和密钥生成可在用户显式授予管理权限后由 agent 调用。
 
-CLI 默认允许本地记录与管理操作；网络同步仍需 `--allow-sync`。桌面入口由本机用户操作，启用这些权限。当前只有入口级权限，还没有身份/对象级 ACL；不要把它当作任意不可信 agent 的安全沙箱。
+CLI 默认允许本地记录与管理操作；网络同步仍需 `--allow-sync`。桌面入口由本机用户操作，启用这些权限。Web 默认只读，启动本机服务时按 MCP 相同参数授权。浏览器请求经本机 MCP 子进程调用，不能从 JSON 参数授予自己写入、管理或同步权限。
+
+当前只有入口级权限，还没有身份/对象级 ACL；不要把它当作任意不可信 agent 的安全沙箱。
 
 ```json
 {"api_version":"1","ok":false,"error":{"code":"revision_conflict","message":"Entity changed, was deleted, or has unresolved conflicts","details":{"current":{"id":"…","heads":[]}}}}

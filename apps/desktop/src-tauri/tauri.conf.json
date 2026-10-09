@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Continuo",
-  "version": "0.1.0",
-  "identifier": "io.continuo.app",
+  "version": "0.1.1",
+  "identifier": "io.continuo.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -23,5 +23,5 @@
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
-  "bundle": { "active": false }
+  "bundle": { "active": true }
 }

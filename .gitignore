@@ -10,3 +10,4 @@ apps/desktop/src-tauri/gen/
 *.sqlite*
 *.key
 .env
+.local-demo/

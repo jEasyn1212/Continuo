@@ -1,17 +1,22 @@
 {
   "name": "continuo-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "tauri": "tauri",
-    "format": "prettier --write src vite.config.ts",
-    "format:check": "prettier --check src vite.config.ts"
+    "format": "prettier --write src vite.config.ts web/*.mjs demo-app.mjs index.html",
+    "format:check": "prettier --check src vite.config.ts web/*.mjs demo-app.mjs index.html",
+    "web": "node web/server.mjs",
+    "test:web": "node --test web/server.test.mjs",
+    "app:build": "tauri build --bundles app",
+    "demo:web": "node web/server.mjs --data-dir ../../.local-demo --allow-writes --allow-admin",
+    "demo:app": "node demo-app.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/api": "2.11.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

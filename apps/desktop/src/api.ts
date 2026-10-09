@@ -40,13 +40,89 @@ interface Envelope<T> {
   error?: { code: string; message: string; details?: unknown };
 }
 export const desktopAvailable = isTauri();
+export interface Tool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+export interface Connection {
+  mode: "app" | "web";
+  permissions: { writes: boolean; admin: boolean; sync: boolean };
+  tools?: Tool[];
+}
+let webToken: string | null = null;
+export async function connect(): Promise<Connection> {
+  if (desktopAvailable) {
+    const catalog = await call<{
+      operations: {
+        tool: string;
+        description: string;
+        input_schema: Record<string, unknown>;
+      }[];
+    }>("system.describe");
+    return {
+      mode: "app",
+      permissions: { writes: true, admin: true, sync: true },
+      tools: catalog.operations.map((op) => ({
+        name: op.tool,
+        description: op.description,
+        inputSchema: op.input_schema,
+      })),
+    };
+  }
+  try {
+    const response = await fetch("/api/bootstrap", {
+      headers: { "X-Continuo-Client": "web-v1" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    });
+    const envelope = await response.json();
+    if (
+      !response.ok ||
+      !envelope.ok ||
+      typeof envelope.data?.token !== "string"
+    )
+      throw new Error("unavailable");
+    webToken = envelope.data.token;
+    return envelope.data;
+  } catch {
+    webToken = null;
+    throw new Error(
+      "尚未连接本机服务。请启动 Continuo Web 后，从终端显示的本地地址打开。启动步骤见页面提示。",
+    );
+  }
+}
 export async function call<T>(
   method: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
-  if (!desktopAvailable)
-    throw new Error("请通过桌面应用打开，浏览器预览不连接本地数据。");
-  const result = await invoke<Envelope<T>>("api_call", { method, params });
+  let result: Envelope<T>;
+  if (desktopAvailable)
+    result = await invoke<Envelope<T>>("api_call", { method, params });
+  else {
+    if (!webToken) await connect();
+    try {
+      const response = await fetch("/api/call", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Continuo-Client": "web-v1",
+          Authorization: `Bearer ${webToken}`,
+        },
+        body: JSON.stringify({ method, params }),
+        signal: AbortSignal.timeout(125_000),
+      });
+      result = await response.json();
+      if (result.api_version !== "1" || typeof result.ok !== "boolean")
+        throw new Error("invalid response");
+      if (response.status === 401) webToken = null;
+    } catch {
+      webToken = null;
+      throw new Error(
+        "本机服务连接中断。请确认终端服务仍在运行，刷新状态后再尝试，避免重复提交修改。",
+      );
+    }
+  }
   if (!result.ok) {
     const messages: Record<string, string> = {
       revision_conflict: "这条记录已在其他入口更新，请刷新后重新查看版本。",
@@ -64,6 +140,8 @@ export async function call<T>(
       credential_not_allowed: "这里应保存凭据引用，登录凭据需单独保管。",
       invalid_key: "请选择有效的 32 字节加密密钥文件。",
       unsafe_key_permissions: "密钥文件权限过于开放，请设置为仅本人可读写。",
+      web_unauthorized: "本机服务已重启，请刷新状态重新连接。",
+      web_unavailable: "本机核心已停止，请重启 Web 服务，再刷新确认操作结果。",
       not_found: "这条记录已不存在，请刷新列表。",
     };
     throw new Error(

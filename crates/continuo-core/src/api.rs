@@ -82,6 +82,15 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
             false,
         ),
         op(
+            "system.describe",
+            "Describe the operations enabled for this interface and their input schemas",
+            json!({}),
+            &[],
+            false,
+            false,
+            false,
+        ),
+        op(
             "entity.list",
             "List identities, tasks, capabilities, MCP definitions, sessions or devices",
             json!({"kind":kind,"include_deleted":{"type":"boolean"}}),
@@ -247,6 +256,7 @@ impl Service {
         };
         match method {
             "system.status" => self.store.status(),
+            "system.describe" => Ok(json!({"operations":self.available()})),
             "entity.list" => Ok(
                 json!({"entities":self.store.list(params.get("kind").and_then(Value::as_str),params.get("include_deleted").and_then(Value::as_bool).unwrap_or(false))?}),
             ),

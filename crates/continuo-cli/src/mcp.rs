@@ -108,7 +108,7 @@ fn handle(service: &Service, r: Value, initialized: &mut bool, ready: &mut bool)
             *initialized = true;
             Some(success(
                 id,
-                json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"continuo","version":"0.1.0"},"instructions":"Continuo manages explicit local records. Identity is not account or permission isolation. Fetch revisions before mutation. Native launch plans do not execute processes. Never put credentials into entity data."}),
+                json!({"protocolVersion":version,"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"continuo","version":env!("CARGO_PKG_VERSION")},"instructions":"Continuo manages explicit local records. Identity is not account or permission isolation. Fetch revisions before mutation. Native launch plans do not execute processes. Never put credentials into entity data."}),
             ))
         }
         "ping" => Some(success(id, json!({}))),

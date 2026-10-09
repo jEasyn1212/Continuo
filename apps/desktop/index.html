@@ -7,7 +7,36 @@
     <title>Continuo</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <section
+        style="
+          max-width: 720px;
+          margin: 10vh auto;
+          padding: 32px;
+          font-family: system-ui;
+          line-height: 1.7;
+          color: #183b33;
+          background: #f2f7f4;
+          border-radius: 20px;
+        "
+      >
+        <h1>Continuo · App / Web</h1>
+        <p>
+          正在载入界面。如直接打开 HTML 文件或脚本未加载，请启动本机 Web
+          服务，再从本地地址打开完整界面。
+        </p>
+        <pre style="overflow: auto">
+cargo build -p continuo-cli
+cd apps/desktop
+npm ci &amp;&amp; npm run build
+npm run web -- --allow-writes --allow-admin</pre>
+        <a href="http://127.0.0.1:1421">打开本机 Continuo Web →</a>
+        <p>
+          App
+          可以独立运行；普通浏览器通过本机服务访问数据。没有连接时不会展示模拟记录。
+        </p>
+      </section>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -4,11 +4,11 @@
 
 Continuo is an open-source, local-first workspace for identities, tasks, capabilities, MCP connections and sessions across agents and devices. Users bring their own synchronization storage. No Continuo-hosted backend is required.
 
-这是独立的新项目。首版仅接入 **Claude Code、Codex、Hermes**，以适配层隔离运行时差异。桌面端、CLI、MCP stdio 接口共享同一个 Rust 应用服务，agent 可以通过机器接口操作工作空间。
+这是独立的新项目。首版仅接入 **Claude Code、Codex、Hermes**，以适配层隔离运行时差异。App 和 Web 共用 React 界面，桌面端、Web 本机桥接、CLI、MCP stdio 接口共享同一个 Rust 应用服务，agent 可以通过机器接口操作工作空间。
 
 ## 当前状态
 
-这是 `0.1.0` 开发原型，尚未发布安装包。
+这是 `0.1.1` 开发原型。已验证 macOS arm64 本地 `.app` 构建，尚未发布安装包；App/Web 实际显示仍待交互验证。
 
 | 已实现 | 范围 |
 | --- | --- |
@@ -17,13 +17,14 @@ Continuo is an open-source, local-first workspace for identities, tasks, capabil
 | MCP stdio | 初始化、工具发现、结构化工具结果、按启动授权暴露工具 |
 | 三种 agent 适配器 | 能力声明、启动/原生恢复参数计划、MCP 注册文档数据 |
 | Git 同步 | 用户自选 GitHub 仓库、加密事件、断网本地修改、并发冲突、删除传播 |
-| 桌面端 | 六领域管理、版本冲突选择、启动计划、同步配置与手动同步 |
+| App / Web 共用界面 | 六领域管理、版本冲突选择、启动计划、同步配置与手动同步、共享接口控制台 |
+| 独立 Web 入口 | 普通浏览器经本机 HTTP → MCP → Rust 核心操作真实数据；默认只读 |
 
 原型目前不执行 agent 进程、不投递 Skills 或改写原生配置，不读取现有账号与会话日志。原生恢复参数需要目标运行时和本机数据支持；跨 agent 接续输出工作材料，不迁移内部状态。设备记录不等于设备授权，首版尚未实现配对、密钥恢复/轮换、细粒度权限和实时会话同步。
 
 ## 构建
 
-需要 Rust 1.87+、Git；桌面端另需 Node.js 22.12+ 及 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)。
+需要 Rust 1.87+、Git；Web/桌面源码工作流另需 Node.js 22.12+，桌面端还需 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)。
 
 ```sh
 cargo test --workspace
@@ -34,9 +35,38 @@ cd apps/desktop
 npm ci
 npm run build
 npm run tauri dev
+# macOS 本地构建真正的 .app
+npm run app:build
 ```
 
 默认数据目录为 `~/.continuo`；所有入口均可用 `CONTINUO_DATA_DIR` 指定同一个目录，CLI 另支持 `--data-dir`。应用代码、同步仓库和本地数据目录分别保存。
+
+## App 和 Web 两个入口
+
+App 通过 Tauri 原生调用核心，不依赖 Web 服务。Web 是普通浏览器中的独立入口，通过仅监听 `127.0.0.1` 的本机进程读取同一份数据；它不是 Continuo 统一同步服务。两者共用同一套 React 界面和权限目录。
+
+在完成上面的 CLI/UI 构建后，从 `apps/desktop` 启动浏览器入口：
+
+```sh
+# 默认只读
+npm run web
+# 用户明确允许本机修改与配置管理；网络同步仍关闭
+npm run web -- --allow-writes --allow-admin
+```
+
+打开终端打印的 `http://127.0.0.1:1421`，保持服务进程运行。需要同步时显式增加 `--allow-sync`；可用 `--data-dir`、`--binary`、`--assets`、`--port` 指定本机参数。启动授权通过 MCP 传递，浏览器调用参数不能提升权限。
+
+HTML 位于 `apps/desktop/dist/index.html`，由本机服务提供。直接双击 HTML 会显示启动指引；完整浏览器操作需要本机服务。仅运行 Vite 可查看连接引导，不会生成模拟工作记录。
+
+使用隔离项目目录演示，避免与日常数据混用：
+
+```sh
+# apps/desktop 中，两个终端分别运行
+npm run demo:web
+npm run demo:app
+```
+
+二者都使用根目录下被 Git 忽略的 `.local-demo`，默认空白。演示创建的是真实本地记录，不自动导入配置或生成示例数据。Air 的构建、打开及演示步骤见 [双入口演示](docs/demo.md)。
 
 ## 从 CLI 开始
 
@@ -109,7 +139,7 @@ GitHub 同步是最终一致、手动触发的工作记录同步。高频会话�
 ```text
 crates/continuo-core/       领域事件、存储、服务接口、agent 适配器、同步
 crates/continuo-cli/        CLI 与 MCP stdio 传输
-apps/desktop/              React 界面与薄 Tauri 桥接
+apps/desktop/              共用 React 界面、Tauri App 与 Web/MCP 本机桥接
 docs/                      产品边界、架构、接口、同步协议与决策
 ```
 
