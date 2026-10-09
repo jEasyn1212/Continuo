@@ -72,17 +72,7 @@ impl Event {
             return Err(Error::new("input_too_large", "Event exceeds 1 MiB"));
         }
         if self.kind == "session" {
-            if let Some(agent) = self.data.get("agent") {
-                if !agent
-                    .as_str()
-                    .is_some_and(|id| !id.is_empty() && id.len() <= 128)
-                {
-                    return Err(Error::new(
-                        "invalid_event",
-                        "Session agent must be a nonempty identifier of at most 128 bytes",
-                    ));
-                }
-            }
+            crate::session::Profile::parse(&self.data)?;
         }
         Ok(())
     }

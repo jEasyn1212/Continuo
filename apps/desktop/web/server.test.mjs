@@ -223,7 +223,7 @@ test("production HTML and its compiled assets are served independently of Tauri"
   const bootstrap = await fetch(`${server.url}/api/bootstrap`, {
     headers: { "X-Continuo-Client": "web-v1" },
   });
-  assert.equal((await bootstrap.json()).data.server.version, "0.5.0");
+  assert.equal((await bootstrap.json()).data.server.version, "0.6.0");
 });
 
 test("Identity operations cross Web/MCP/CLI with local selection, real bindings and fail-closed preparation", async (t) => {
@@ -542,4 +542,100 @@ test("MCP definitions, local mapping, registration and bounded checks have separ
     false,
   );
   assert.equal((await normal.call("mcp.probe", {})).body.ok, false);
+});
+
+test("Session references and local environments share core across Web/MCP/CLI; native resume and context handoff stay distinct", async (t) => {
+  const f = await fixture(t, { writes: true, admin: true });
+  const task = (
+    await f.call("entity.create", {
+      kind: "task",
+      name: "Session task",
+      data: { goal: "Continue review", next_steps: ["Check evidence"] },
+    })
+  ).body.data;
+  const e = (
+    await f.call("session.register", {
+      name: "Recorded native session",
+      data: {
+        agent: "codex",
+        native_session_id: "fixture-session-id",
+        task_id: task.id,
+        summary: "User provided progress",
+      },
+    })
+  ).body.data;
+  const before = (await f.call("session.inspect", { id: e.id })).body.data;
+  assert.equal(before.resume.ready, false);
+  assert.equal(before.continuation.ready, true);
+  assert.equal(before.history_read, false);
+  const mapped = (
+    await f.call("session.map", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      expected_mapping_revision: "none",
+      mapping: {
+        executable: binary,
+        cwd: f.dataDir,
+        state_present_confirmed: true,
+        account_ref: "credential:fixture",
+      },
+    })
+  ).body;
+  assert.equal(mapped.ok, true);
+  const resume = (
+    await f.call("session.resume_plan", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      expected_mapping_revision: mapped.data.mapping.revision,
+    })
+  ).body;
+  assert.equal(resume.data.executed, false);
+  assert.equal(resume.data.mode, "native_resume");
+  assert.ok(resume.data.args.includes("resume"));
+  const continued = (
+    await f.call("session.continue_plan", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      target_agent: "hermes",
+      expected_task_revision: task.heads[0].revision,
+      cwd: f.dataDir,
+    })
+  ).body;
+  assert.equal(continued.ok, true);
+  assert.equal(continued.data.mode, "context_handoff");
+  assert.equal(continued.data.native_session_id_transferred, false);
+  assert.ok(!JSON.stringify(continued.data).includes("fixture-session-id"));
+  const cli = spawnSync(
+    binary,
+    ["--data-dir", f.dataDir, "call", "session.inspect", "--input", "-"],
+    { input: JSON.stringify({ id: e.id }), encoding: "utf8" },
+  );
+  assert.equal(cli.status, 0);
+  assert.equal(
+    JSON.parse(cli.stdout).data.mapping.account_ref,
+    "credential:fixture",
+  );
+  const cancelled = (
+    await f.call("session.transition", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      status: "cancelled",
+      reason: "User cancels recorded work",
+    })
+  ).body;
+  assert.equal(cancelled.ok, true);
+  assert.equal(
+    (await f.call("session.inspect", { id: e.id })).body.data.continuation
+      .ready,
+    false,
+  );
+  const stale = (
+    await f.call("session.transition", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      status: "paused",
+      reason: "stale",
+    })
+  ).body;
+  assert.equal(stale.error.code, "revision_conflict");
 });

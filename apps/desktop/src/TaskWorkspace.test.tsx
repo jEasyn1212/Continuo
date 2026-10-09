@@ -14,6 +14,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { call, connect, Adapter, Entity, Event as StoredEvent } from "./api";
+import { SessionWorkspace } from "./SessionWorkspace";
 import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -578,4 +579,190 @@ test("MCP connection check cancellation remains available while the protocol req
     target_agent: "codex",
   });
   expect(inspect.connection.state).toBe("cancelled");
+});
+
+async function sessionFixture() {
+  const task = await call<Entity>("entity.create", {
+    kind: "task",
+    name: "Linked task",
+    data: { goal: "Continue recorded work", next_steps: ["Check source"] },
+  });
+  return {
+    task,
+    session: await call<Entity>("session.register", {
+      name: "Recorded session",
+      data: {
+        agent: "codex",
+        native_session_id: "fixture-native-id",
+        task_id: task.id,
+        summary: "Review reached verification",
+      },
+    }),
+  };
+}
+function sessionUi(writable = true, refreshSignal: unknown = 0) {
+  return (
+    <SessionWorkspace
+      writable={writable}
+      admin={true}
+      adapters={adapters}
+      refreshSignal={refreshSignal}
+      onChange={async () => {}}
+    />
+  );
+}
+test("Session UI registers links, generates fresh handoff context and records cancellation without process execution", async () => {
+  const task = await call<Entity>("entity.create", {
+    kind: "task",
+    name: "Linked task",
+    data: { goal: "Review change", next_steps: ["Read tests"] },
+  });
+  render(sessionUi());
+  await click("＋ 登记会话");
+  await fill("会话名称", "New recorded session");
+  await fill("来源 agent", "codex");
+  await fill("原生会话 ID", "fixture-native-id");
+  await fill("关联任务", task.id);
+  await fill("可携带的会话摘要", "Reviewed source, verify tests next");
+  await click("保存会话");
+  await screen.findByRole("button", { name: "编辑会话关联" });
+  await click("生成会话接续材料");
+  const packet = await screen.findByLabelText("会话接续指令");
+  expect((packet as HTMLTextAreaElement).value).toContain("Reviewed source");
+  expect((packet as HTMLTextAreaElement).value).not.toContain(
+    "fixture-native-id",
+  );
+  await fill("接续设备工作目录", dataDir);
+  await fill("接续目标 agent", "hermes");
+  await click("生成新会话接续计划");
+  expect((await screen.findByLabelText("会话计划")).textContent).toContain(
+    '"executed": false',
+  );
+  expect(screen.getByLabelText("会话计划").textContent).not.toContain(
+    "fixture-native-id",
+  );
+  await fill("会话新状态", "cancelled");
+  await fill("会话变化原因", "Stop this recorded work");
+  await click("记录会话状态");
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "生成会话接续材料" })
+        .matches(":disabled"),
+    ).toBe(true),
+  );
+});
+test("Session environment is local, needs explicit native-state confirmation, and supports discard and clearing", async () => {
+  await service.close();
+  service = await startWebServer({
+    binary,
+    assets: path.join(directory, "assets"),
+    dataDir,
+    port: 0,
+    writes: true,
+    admin: true,
+  });
+  await connect();
+  const { session } = await sessionFixture();
+  render(sessionUi());
+  await click(/Recorded session/);
+  await screen.findByRole("button", { name: "编辑会话关联" });
+  await click("配置本机环境");
+  await fill("本机 agent 可执行路径", binary);
+  await fill("本机工作目录", dataDir);
+  await fill("本机账号引用", "credential:test-reference");
+  await click("保存本机环境");
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "生成原生恢复计划" })
+        .matches(":disabled"),
+    ).toBe(true),
+  );
+  await click("配置本机环境");
+  const confirm = screen.getByLabelText(
+    "我已确认这台设备和所用账号下存在这个原生会话",
+  );
+  fireEvent.click(confirm);
+  await click("保存本机环境");
+  await click("生成原生恢复计划");
+  expect((await screen.findByLabelText("会话计划")).textContent).toContain(
+    '"mode": "native_resume"',
+  );
+  expect(screen.getByLabelText("会话计划").textContent).toContain(
+    '"account_authentication_verified": false',
+  );
+  await click("编辑会话关联");
+  await fill("会话名称", "Unsaved rename");
+  vi.spyOn(window, "confirm").mockReturnValue(false);
+  await click("取消编辑");
+  expect((screen.getByLabelText("会话名称") as HTMLInputElement).value).toBe(
+    "Unsaved rename",
+  );
+  vi.mocked(window.confirm).mockReturnValue(true);
+  await click("取消编辑");
+  expect(
+    (await call<Entity>("entity.get", { id: session.id })).heads[0].name,
+  ).toBe("Recorded session");
+  await click("清除本机环境");
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "生成原生恢复计划" })
+        .matches(":disabled"),
+    ).toBe(true),
+  );
+});
+test("Session stale edits retain draft and readonly UI prevents mutations", async () => {
+  const { session } = await sessionFixture();
+  const view = render(sessionUi());
+  await click(/Recorded session/);
+  await click("编辑会话关联");
+  await fill("会话名称", "Draft preserved");
+  await call("entity.update", {
+    id: session.id,
+    expected_revision: session.heads[0].revision,
+    name: "Other entry update",
+  });
+  await click("保存会话");
+  await screen.findByRole("alert");
+  expect((screen.getByLabelText("会话名称") as HTMLInputElement).value).toBe(
+    "Draft preserved",
+  );
+  view.unmount();
+  render(sessionUi(false));
+  expect(
+    screen.getByRole("button", { name: "＋ 登记会话" }).matches(":disabled"),
+  ).toBe(true);
+  await click(/Other entry update/);
+  await screen.findByRole("button", { name: "编辑会话关联" });
+  expect(
+    screen.getByRole("button", { name: "编辑会话关联" }).matches(":disabled"),
+  ).toBe(true);
+  expect(
+    screen.getByRole("button", { name: "配置本机环境" }).matches(":disabled"),
+  ).toBe(true);
+});
+
+test("Session checks refresh when linked task changes and remove plans from the old context", async () => {
+  const { session, task } = await sessionFixture();
+  const view = render(sessionUi());
+  await click(/Recorded session/);
+  await click("生成会话接续材料");
+  await screen.findByLabelText("会话接续指令");
+  await call("entity.delete", {
+    id: task.id,
+    expected_revision: task.heads[0].revision,
+  });
+  view.rerender(sessionUi(true, 1));
+  await screen.findByText("关联任务缺失、已删除或有冲突");
+  expect(screen.queryByLabelText("会话接续指令")).toBeNull();
+  expect(
+    screen
+      .getByRole("button", { name: "生成会话接续材料" })
+      .matches(":disabled"),
+  ).toBe(true);
+  expect(
+    (await call<Entity>("entity.get", { id: session.id })).heads[0].revision,
+  ).toBe(session.heads[0].revision);
 });

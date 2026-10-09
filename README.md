@@ -160,3 +160,5 @@ MIT，见 [LICENSE](LICENSE)。参考来源及代码借用规则见 [THIRD_PARTY
 能力模块的字段、检查流程和文本导入边界见 [docs/capability.md](docs/capability.md)。
 
 MCP 模块与一次连接检查的执行授权、边界见 [docs/mcp.md](docs/mcp.md)。
+
+会话关联、设备环境与原生恢复/跨 agent 接续的区别见 [docs/session.md](docs/session.md)。

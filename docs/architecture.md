@@ -24,11 +24,13 @@ flowchart TD
 
 设备 UUID 是事件来源标识，不是身份认证。事件时间用于显示，不参与冲突胜负。当前只有一个本地 vault，尚无多租户或细粒度资源授权。
 
-`AgentAdapter` 有三个基础接口：
+`AgentAdapter` 有基础接口：
 
 - `descriptor()`：稳定标识、可调用能力、实际实现的限制。
 - `prepare_launch()`：返回 executable、argv、cwd、env 和告警，不执行 shell 拼接。
-- `mcp_registration()`：返回目标格式与注册文档数据，不自行改写配置。
+- `mcp_registration()` / `prepare_mcp()`：返回注册文档，不自行改写配置。
+- `prepare_capability()`：准备检查后的能力文本。
+- `prepare_resume()`：准备本机原生恢复参数，默认实现明确不支持；不读取会话历史或执行进程。
 
 添加新 agent 的步骤：实现 trait、登记适配器、增加契约样例并验证目标运行时版本。协议入口和领域存储不应因此改变。未来加入 `probe / inspect / plan_apply / apply / rollback / discover_sessions` 等明确接口时，先定义共同 DTO 和错误，再由适配器实现，不能以一个“支持 agent”布尔值代替细粒度能力。
 

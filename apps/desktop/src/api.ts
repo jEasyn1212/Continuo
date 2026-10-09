@@ -163,6 +163,21 @@ export async function call<T>(
         "依赖能力缺失、已删除或有冲突，请清除关联或先修复依赖。",
       capability_graph_too_large: "能力依赖图或合并正文过大，请减少本次选择。",
       capability_unsupported: "当前适配器尚未支持能力应用。",
+      invalid_session_profile:
+        "会话字段不符合要求。路径、账号和原始历史不要存入同步记录；引用使用 project:相对路径或无凭据的 HTTPS。",
+      session_unavailable: "会话已删除或有并发版本，请先修复。",
+      session_relation_unavailable:
+        "关联任务或身份缺失、已删除或有冲突，请更换或清除关联。",
+      session_identity_mismatch: "会话与任务身份不同，请明确调整关联。",
+      session_transition_requires_reason:
+        "状态变化需要新增原因，请使用会话状态记录入口。",
+      invalid_session_transition: "请选择当前允许的会话状态变化。",
+      invalid_session_mapping: "请填写本机绝对路径和账号引用，不填写秘密。",
+      session_mapping_conflict:
+        "会话或本机环境已更新，草稿已保留，请刷新核对版本。",
+      session_not_ready:
+        "请处理会话检查项：原生恢复需本机确认，跨 agent 接续需可用任务和身份。",
+      session_adapter_unsupported: "这个 adapter 尚未实现原生会话恢复计划。",
       invalid_task_profile:
         "任务字段、状态或产物引用不符合要求。受阻需填写阻碍，完成需填写结论；产物使用 project:相对路径或不含凭据、查询参数的 HTTPS 地址。",
       invalid_task_identity:

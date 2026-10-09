@@ -2,6 +2,7 @@ use crate::{
     adapters::{LaunchRequest, Registry},
     capability, crypto, identity, mcp,
     model::KINDS,
+    session,
     store::Store,
     sync::{self, SyncBackend},
     task, Error, Result,
@@ -169,6 +170,14 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op("task.decision", "Append a decision with its rationale to the exact expected task revision", json!({"id":string,"expected_revision":string,"summary":string,"reason":string}), &["id","expected_revision","summary","reason"], true, false, false),
         op("task.artifact", "Record a portable artifact reference and user verification notes; no file upload", json!({"id":string,"expected_revision":string,"title":string,"reference":string,"verification":string}), &["id","expected_revision","title","reference"], true, false, false),
         op("task.handoff", "Build a revision-bound task packet with identity, progress, decisions, artifacts and preflight checklist", json!({"task_id":string,"target_agent":agent,"expected_revision":string}), &["task_id","target_agent"], false, false, false),
+        op("session.register", "Register a caller-supplied session reference; no history discovery or execution", json!({"name":string,"data":data}), &["name","data"], true,false,false),
+        op("session.inspect", "Inspect logical links and device-local resume prerequisites; status is user recorded", json!({"id":string}), &["id"],false,false,false),
+        op("session.transition", "Record a status change and reason; never terminate or start an agent process", json!({"id":string,"expected_revision":string,"status":{"type":"string","enum":session::STATES},"reason":string}), &["id","expected_revision","status","reason"],true,false,false),
+        op("session.map", "Map local runtime and cwd and record caller confirmation of native state; no account login or history access", json!({"id":string,"expected_revision":string,"expected_mapping_revision":string,"mapping":data}), &["id","expected_revision","expected_mapping_revision","mapping"],true,false,true),
+        op("session.clear_mapping", "Clear device-local resume environment with a revision tombstone", json!({"id":string,"expected_mapping_revision":string}), &["id","expected_mapping_revision"],true,false,true),
+        op("session.resume_plan", "Prepare native resume argv on this device; does not execute or reapply identity instructions", json!({"id":string,"expected_revision":string,"expected_mapping_revision":string}), &["id","expected_revision","expected_mapping_revision"],false,false,false),
+        op("session.packet", "Build portable task and session summary context for another agent, without native session ID or internal state transfer", json!({"id":string,"expected_revision":string,"target_agent":agent,"expected_task_revision":string}), &["id","expected_revision","target_agent","expected_task_revision"],false,false,false),
+        op("session.continue_plan", "Prepare a fresh target-agent launch plan using a revision-bound session context packet", json!({"id":string,"expected_revision":string,"target_agent":agent,"expected_task_revision":string,"cwd":string}), &["id","expected_revision","target_agent","expected_task_revision","cwd"],false,false,false),
         op(
             "agent.list",
             "Describe registered agent adapters and their limits",
@@ -410,6 +419,69 @@ impl Service {
                     method.strip_prefix("task.").unwrap(),
                     &params,
                 )
+            }
+            "session.register" => {
+                session::register(&self.store, text("name")?, params["data"].clone())
+            }
+            "session.inspect" => session::inspect(&self.store, text("id")?, &self.registry),
+            "session.transition" => session::transition(
+                &self.store,
+                text("id")?,
+                text("expected_revision")?,
+                text("status")?,
+                text("reason")?,
+            ),
+            "session.map" => session::map(
+                &self.store,
+                text("id")?,
+                text("expected_revision")?,
+                text("expected_mapping_revision")?,
+                params["mapping"].clone(),
+            ),
+            "session.clear_mapping" => {
+                session::clear(&self.store, text("id")?, text("expected_mapping_revision")?)
+            }
+            "session.resume_plan" => session::resume_plan(
+                &self.store,
+                text("id")?,
+                text("expected_revision")?,
+                text("expected_mapping_revision")?,
+                &self.registry,
+            ),
+            "session.packet" | "session.continue_plan" => {
+                let packet = session::packet(
+                    &self.store,
+                    text("id")?,
+                    text("expected_revision")?,
+                    text("target_agent")?,
+                    text("expected_task_revision")?,
+                    &self.registry,
+                )?;
+                if method == "session.packet" {
+                    return Ok(packet);
+                }
+                let mut input = json!({"agent":text("target_agent")?,"cwd":text("cwd")?,"task_id":packet["task_id"],"expected_task_revision":packet["task_revision"],"prompt":packet["session_instructions"],"use_current_identity":false});
+                if packet["effective_identity_id"].is_string() {
+                    input["identity_id"] = packet["effective_identity_id"].clone();
+                }
+                let mut plan = self.call("agent.prepare", input)?;
+                let current_session = self.store.get(text("id")?)?;
+                if current_session.conflicted
+                    || current_session.heads[0].deleted
+                    || current_session.heads[0].revision != text("expected_revision")?
+                    || plan["identity_context"]["identity"]["revision"]
+                        != packet["session_context"]["identity_revision"]
+                {
+                    return Err(Error::new(
+                        "revision_conflict",
+                        "Source session changed while preparing the plan",
+                    ));
+                }
+                plan["mode"] = json!("context_handoff");
+                plan["session_context"] = packet["session_context"].clone();
+                plan["native_session_id_transferred"] = json!(false);
+                plan["internal_state_transferred"] = json!(false);
+                Ok(plan)
             }
             "agent.list" => Ok(json!({"adapters":self.registry.list()})),
             "agent.prepare" => {

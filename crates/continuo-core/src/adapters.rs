@@ -33,6 +33,12 @@ pub trait AgentAdapter: Send + Sync {
     fn descriptor(&self) -> Descriptor;
     fn prepare_launch(&self, request: &LaunchRequest) -> Result<LaunchPlan>;
     fn mcp_registration(&self, executable: &str, args: &[String]) -> Value;
+    fn prepare_resume(&self, _cwd: &str, _native_session_id: &str) -> Result<LaunchPlan> {
+        Err(Error::new(
+            "session_adapter_unsupported",
+            "Adapter does not implement native session resume plans",
+        ))
+    }
     fn prepare_mcp(
         &self,
         _key: &str,
@@ -146,6 +152,13 @@ fn base(descriptor: &Descriptor, r: &LaunchRequest) -> Result<LaunchPlan> {
     Ok(LaunchPlan {agent:descriptor.id.into(),executable:descriptor.executable.into(),args:vec![],cwd:r.cwd.clone(),env:BTreeMap::new(),executed:false,warnings:vec!["Plan only: verify the installed runtime version, login and permissions before executing.".into(),"Identity instructions are context, not account switching or security isolation.".into()]})
 }
 impl AgentAdapter for ClaudeCode {
+    fn prepare_resume(&self, cwd: &str, native_session_id: &str) -> Result<LaunchPlan> {
+        self.prepare_launch(&LaunchRequest {
+            cwd: cwd.into(),
+            native_session_id: Some(native_session_id.into()),
+            ..LaunchRequest::default()
+        })
+    }
     fn prepare_mcp(
         &self,
         key: &str,
@@ -197,6 +210,13 @@ impl AgentAdapter for ClaudeCode {
     }
 }
 impl AgentAdapter for Codex {
+    fn prepare_resume(&self, cwd: &str, native_session_id: &str) -> Result<LaunchPlan> {
+        self.prepare_launch(&LaunchRequest {
+            cwd: cwd.into(),
+            native_session_id: Some(native_session_id.into()),
+            ..LaunchRequest::default()
+        })
+    }
     fn prepare_mcp(
         &self,
         key: &str,
@@ -255,6 +275,13 @@ impl AgentAdapter for Codex {
     }
 }
 impl AgentAdapter for Hermes {
+    fn prepare_resume(&self, cwd: &str, native_session_id: &str) -> Result<LaunchPlan> {
+        self.prepare_launch(&LaunchRequest {
+            cwd: cwd.into(),
+            native_session_id: Some(native_session_id.into()),
+            ..LaunchRequest::default()
+        })
+    }
     fn prepare_mcp(
         &self,
         key: &str,

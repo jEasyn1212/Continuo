@@ -11,6 +11,7 @@ import {
   Status,
 } from "./api";
 import "./style.css";
+import { SessionWorkspace } from "./SessionWorkspace";
 import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -469,11 +470,22 @@ function App() {
               onDirtyChange={setHasUnsaved}
             />
           )}
+          {page === "session" && connected && (
+            <SessionWorkspace
+              writable={writable}
+              admin={connection.permissions.admin}
+              adapters={adapters}
+              refreshSignal={status}
+              onChange={refresh}
+              onDirtyChange={setHasUnsaved}
+            />
+          )}
           {domain &&
             page !== "identity" &&
             page !== "task" &&
             page !== "capability" &&
-            page !== "mcp" && (
+            page !== "mcp" &&
+            page !== "session" && (
               <>
                 <div className="page-heading">
                   <div>
@@ -1007,7 +1019,7 @@ function App() {
           )}
         </div>
         <footer>
-          Continuo 0.5.0{" "}
+          Continuo 0.6.0{" "}
           <span>本地优先 · 用户自选存储 · App / Web / CLI / MCP 共享核心</span>
         </footer>
       </main>
