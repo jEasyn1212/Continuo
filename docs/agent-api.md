@@ -25,6 +25,12 @@
 | session.handoff | 从明确的任务记录生成跨 agent 接续材料 | 读 |
 | sync.key_generate | 在指定路径创建不覆盖的密钥文件 | 写 + 管理 |
 | sync.configure | 指定 GitHub 仓库与本地密钥路径 | 写 + 管理 |
+| sync.inspect / sync.job | 本机状态、最近已验证快照、指定作业结果 | 读 |
+| sync.preview | 校验远端与待同步数量，不导入/发布业务事件 | 写 + 网络 |
+| sync.cancel | 取消指定当前作业，不承诺撤回已发布提交 | 写 |
+| sync.set_enabled | 配置版本 CAS 停用/恢复本机，不撤销其他设备 | 写 + 管理 |
+| entity.history / entity.history_version | 因果历史引用与明确选择的历史版本 | 读 |
+| entity.restore | 精确 tombstone CAS 恢复历史版本，重验关联 | 写 |
 | sync.run | 与已配置存储交换加密事件 | 写 + 网络 |
 
 MCP 默认只读，由用户配置 `--allow-writes`、`--allow-sync`、`--allow-admin`。后两者需要写权限。请求参数不能修改入口权限。配置和密钥生成可在用户显式授予管理权限后由 agent 调用。
@@ -70,3 +76,9 @@ MCP 使用标准 newline-delimited JSON-RPC stdio，支持协议版本 `2025-11-
 ## 会话引用与本机恢复
 
 接口与边界见 [会话模块](session.md)。session.register/inspect/transition 管理用户提供的引用与状态原因；session.map/clear_mapping 管理设备本地恢复环境；session.resume_plan 是原生恢复参数，session.packet/continue_plan 是明确任务与摘要的跨 agent 接续。后两者不会转移原生 ID 或内部状态。旧 session.handoff 继续作为 task.handoff 的兼容方法。所有接口复用 Service::call 与授权目录。
+
+## 同步与删除恢复
+
+sync.run/preview 可传新的 canonical UUID run_id 和 timeout_ms（100..90000，默认 30000）。sync.inspect 查看状态，sync.job {run_id} 查询作业，sync.cancel {run_id} 取消当前操作。新重试用新 UUID；publication unknown 时重新校验远端再去重。MCP 每进程最多四个并行有界检查/同步 worker，同数据目录同步由文件锁串行，取消走可响应的主循环。
+
+sync.configure 可用 expected_config_revision；sync.set_enabled 必须匹配配置版本。entity.restore {id,expected_revision,source_revision} 从精确单一删除 head 恢复该实体的明确历史活版本；产生新版本，不能擦除 tombstone、跳过并发冲突或恢复运行时秘密。详见 [同步与恢复](sync.md)。

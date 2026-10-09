@@ -1109,3 +1109,21 @@ button.danger {
 .session-workspace .detail-title {
   flex-wrap: wrap;
 }
+
+.sync-workspace .settings-form {
+  margin-bottom: 20px;
+}
+.sync-workspace .sync-record {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  font-size: 13px;
+}
+.sync-workspace .notice {
+  margin: 16px 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted);
+}

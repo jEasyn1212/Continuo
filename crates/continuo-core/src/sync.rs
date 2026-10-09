@@ -1,24 +1,17 @@
-use crate::{
-    crypto,
-    model::Event,
-    store::{private_permissions, Store},
-    Error, Result,
-};
-use fs2::FileExt;
+use crate::{crypto, model::Event, store::Store, Error, Result};
+mod control;
+use control::Control;
+use rusqlite::{Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    collections::BTreeSet,
-    fs::OpenOptions,
-    path::Path,
-    process::{Command, Output},
-};
+use sha2::{Digest, Sha256};
+use std::{collections::BTreeSet, path::Path};
 use uuid::Uuid;
 
 const BRANCH: &str = "continuo-sync";
 const MAX_EVENT_BYTES: u64 = 2 * 1024 * 1024;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitConfig {
     pub remote: String,
@@ -42,14 +35,35 @@ struct Manifest {
 }
 
 pub fn configure(store: &Store, remote: &str, key_file: &str) -> Result<Value> {
+    configure_checked(store, remote, key_file, None)
+}
+pub fn configure_checked(
+    store: &Store,
+    remote: &str,
+    key_file: &str,
+    expected: Option<&str>,
+) -> Result<Value> {
+    let _lease = control::lease(store)?;
     validate_remote(remote)?;
     let key_path = std::fs::canonicalize(key_file)?;
-    crypto::read_key(&key_path)?;
+    let key = crypto::read_key(&key_path)?;
     let config = GitConfig {
         remote: remote.into(),
         key_file: key_path.to_string_lossy().into(),
     };
+    let tx = Transaction::new_unchecked(&store.conn, TransactionBehavior::Immediate)?;
+    let current = config_revision(store)?;
+    if expected.is_some_and(|e| e != current) {
+        return Err(Error::new(
+            "sync_config_changed",
+            "Synchronization settings changed",
+        ));
+    }
     store.set_metadata("sync_config", &serde_json::to_string(&config)?)?;
+    store.set_metadata("sync_config_revision", &Uuid::new_v4().to_string())?;
+    store.set_metadata("sync_key_id", &crypto::key_id(&key))?;
+    store.set_metadata("sync_enabled", "true")?;
+    tx.commit()?;
     Ok(json!({"backend":"git","branch":BRANCH,"configured":true}))
 }
 pub fn configured(store: &Store) -> Result<GitBackend> {
@@ -89,33 +103,81 @@ fn validate_remote(remote: &str) -> Result<()> {
 
 impl SyncBackend for GitBackend {
     fn run(&self, store: &Store) -> Result<Value> {
+        self.controlled(store, None, false, 30000)
+    }
+}
+impl GitBackend {
+    pub fn controlled(
+        &self,
+        store: &Store,
+        id: Option<&str>,
+        preview: bool,
+        timeout: u64,
+    ) -> Result<Value> {
+        let c = Control::begin(store, id, preview, timeout)?;
+        let result = self.exchange(store, &c, preview);
+        c.finish(&result)?;
+        result
+    }
+    fn exchange(&self, store: &Store, c: &Control<'_>, preview: bool) -> Result<Value> {
+        if Path::new(&self.config.remote).is_absolute() && !Path::new(&self.config.remote).is_dir()
+        {
+            return Err(Error::new(
+                "git_failed",
+                "Configured storage is unavailable",
+            ));
+        }
         validate_remote(&self.config.remote)?;
-        let lock_path = store.data_dir.join("sync.lock");
-        let lock = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)?;
-        private_permissions(&lock_path, false)?;
-        lock.try_lock_exclusive()
-            .map_err(|_| Error::new("sync_busy", "Another synchronization is running"))?;
-        let key = crypto::read_key(Path::new(&self.config.key_file))?;
+        if store.metadata("sync_enabled")?.as_deref() == Some("false") {
+            return Err(Error::new(
+                "sync_disabled",
+                "Synchronization is paused on this device",
+            ));
+        }
+        if configured(store)?.config != self.config {
+            return Err(Error::new(
+                "sync_config_changed",
+                "Settings changed before synchronization",
+            ));
+        }
+        let key = crypto::read_key(Path::new(&self.config.key_file)).map_err(|e| {
+            if e.code == "io_error" {
+                Error::new(
+                    "sync_key_missing",
+                    "Configured key is missing or unreadable",
+                )
+            } else {
+                e
+            }
+        })?;
+        if store
+            .metadata("sync_key_id")?
+            .is_some_and(|id| id != crypto::key_id(&key))
+        {
+            return Err(Error::new(
+                "sync_key_changed",
+                "The configured key file changed; restore the original key",
+            ));
+        }
+        let workspace = workspace_id(&self.config.remote, &crypto::key_id(&key));
+        c.phase("contacting")?;
         let scratch = tempfile::tempdir_in(&store.data_dir)?;
         let repo = scratch.path();
-        git(repo, &["init", "--quiet"])?;
-        git(repo, &["remote", "add", "origin", &self.config.remote])?;
+        c.git(repo, &["init", "--quiet"])?;
+        c.git(repo, &["remote", "add", "origin", &self.config.remote])?;
         let remote_ref = format!("refs/heads/{BRANCH}");
-        let refs = git(repo, &["ls-remote", "--heads", "origin", &remote_ref])?;
+        let refs = c.git(repo, &["ls-remote", "--heads", "origin", &remote_ref])?;
         let has_remote = !refs.trim().is_empty();
         let mut seen = BTreeSet::new();
         let mut remote_events: Vec<Event> = vec![];
         if has_remote {
-            git(
+            c.phase("fetching")?;
+            c.git(
                 repo,
                 &["fetch", "--quiet", "--no-tags", "origin", &remote_ref],
             )?;
-            let tree = git(repo, &["ls-tree", "-r", "-l", "FETCH_HEAD"])?;
+            c.phase("validating")?;
+            let tree = c.git(repo, &["ls-tree", "-r", "-l", "FETCH_HEAD"])?;
             let entries = parse_tree(&tree)?;
             if !entries.iter().any(|(path, _)| path == "manifest.json") {
                 return Err(Error::new(
@@ -124,10 +186,11 @@ impl SyncBackend for GitBackend {
                 ));
             }
             for (path, size) in &entries {
+                c.check()?;
                 if *size > MAX_EVENT_BYTES {
                     return Err(Error::new("sync_limit", "Remote event exceeds size limit"));
                 }
-                let bytes = git_bytes(repo, &["show", &format!("FETCH_HEAD:{path}")])?;
+                let bytes = c.bytes(repo, &["show", &format!("FETCH_HEAD:{path}")])?;
                 if path == "manifest.json" {
                     let manifest: Manifest = serde_json::from_slice(&bytes)?;
                     if manifest.format != "continuo-events"
@@ -146,22 +209,61 @@ impl SyncBackend for GitBackend {
                 }
             }
             // No checkout or smudge filters: only validated protocol blobs are materialized.
-            git(repo, &["reset", "--soft", "FETCH_HEAD"])?;
-            git(repo, &["read-tree", "FETCH_HEAD"])?;
+            c.git(repo, &["reset", "--soft", "FETCH_HEAD"])?;
+            c.git(repo, &["read-tree", "FETCH_HEAD"])?;
             std::fs::create_dir(repo.join("events"))?;
             for (path, _) in entries {
                 std::fs::write(
                     repo.join(&path),
-                    git_bytes(repo, &["show", &format!("FETCH_HEAD:{path}")])?,
+                    c.bytes(repo, &["show", &format!("FETCH_HEAD:{path}")])?,
                 )?;
             }
         } else {
             std::fs::create_dir(repo.join("events"))?;
         }
+        if remote_events
+            .iter()
+            .any(|e| e.parents.iter().any(|p| !seen.contains(p)))
+        {
+            return Err(Error::new("missing_parent", "Remote history is incomplete"));
+        }
+        let downloaded = store.validate_import(&remote_events)?;
+        if let Some(old) = checkpoint(store)? {
+            if old.workspace_id == workspace && !old.known_revisions.is_subset(&seen) {
+                return Err(Error::new(
+                    "sync_remote_history_missing",
+                    "Previously observed remote events disappeared; publishing is stopped",
+                ));
+            }
+        }
+        let remote_tip = if has_remote {
+            Some(
+                c.git(repo, &["rev-parse", "FETCH_HEAD"])?
+                    .trim()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        save_checkpoint(store, &workspace, &seen, remote_tip.clone())?;
+        let before = store.events()?;
+        let pending = before
+            .iter()
+            .filter(|e| !seen.contains(&e.revision))
+            .count();
+        if preview {
+            return Ok(
+                json!({"run_id":c.id,"preview_only":true,"downloaded":0,"uploaded":0,"pending_upload":pending,"pending_download":downloaded,"conflicts":store.list(None,false)?.iter().filter(|e|e.conflicted).count(),"published":false,"remote_tip":remote_tip}),
+            );
+        }
+        c.phase("importing")?;
         let downloaded = store.import_events(&remote_events)?;
+        c.phase("encrypting")?;
         let events = store.events()?;
         let mut uploaded = 0;
         for event in &events {
+            c.check()?;
+            event.validate()?;
             if !seen.contains(&event.revision) {
                 std::fs::write(
                     repo.join("events").join(format!("{}.json", event.revision)),
@@ -176,13 +278,14 @@ impl SyncBackend for GitBackend {
             key_id: crypto::key_id(&key),
         };
         std::fs::write(repo.join("manifest.json"), serde_json::to_vec(&manifest)?)?;
-        git(repo, &["add", "--", "manifest.json", "events"])?;
+        c.git(repo, &["add", "--", "manifest.json", "events"])?;
         let changed = !has_remote
-            || !git_output(repo, &["diff", "--cached", "--quiet"])?
+            || !c
+                .output(repo, &["diff", "--cached", "--quiet"])?
                 .status
                 .success();
         if changed {
-            git(
+            c.git(
                 repo,
                 &[
                     "commit",
@@ -191,7 +294,16 @@ impl SyncBackend for GitBackend {
                     "Synchronize encrypted Continuo events",
                 ],
             )?;
-            let pushed = git_output(
+            c.phase("publishing")?;
+            if crypto::key_id(&crypto::read_key(Path::new(&self.config.key_file))?)
+                != crypto::key_id(&key)
+            {
+                return Err(Error::new(
+                    "sync_key_changed",
+                    "Key changed before publishing",
+                ));
+            }
+            let pushed = c.output(
                 repo,
                 &["push", "--quiet", "origin", &format!("HEAD:{remote_ref}")],
             )?;
@@ -199,12 +311,19 @@ impl SyncBackend for GitBackend {
                 return Err(Error::new("sync_push_failed", "Remote changed or push failed; local changes are preserved. Run synchronization again to fetch and retry.").details(json!({"retry_safe":true,"downloaded":downloaded})));
             }
         }
+        let acknowledged = events.iter().map(|e| e.revision.clone()).collect();
+        let tip = if changed {
+            Some(c.git(repo, &["rev-parse", "HEAD"])?.trim().to_string())
+        } else {
+            remote_tip
+        };
+        save_checkpoint(store, &workspace, &acknowledged, tip)?;
         let conflicts = store
             .list(None, false)?
             .iter()
             .filter(|e| e.conflicted)
             .count();
-        let result = json!({"backend":"git","branch":BRANCH,"downloaded":downloaded,"uploaded":uploaded,"conflicts":conflicts,"published":changed,"event_count":events.len()});
+        let result = json!({"run_id":c.id,"backend":"git","branch":BRANCH,"downloaded":downloaded,"uploaded":uploaded,"conflicts":conflicts,"published":changed,"event_count":events.len()});
         store.set_metadata("last_sync", &serde_json::to_string(&result)?)?;
         Ok(result)
     }
@@ -251,54 +370,128 @@ fn parse_tree(tree: &str) -> Result<Vec<(String, u64)>> {
     }
     Ok(entries)
 }
-fn git_output(repo: &Path, args: &[&str]) -> Result<Output> {
-    let mut command = Command::new("git");
-    command
-        .args([
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "tag.gpgsign=false",
-        ])
-        .args(args)
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_AUTHOR_NAME", "Continuo")
-        .env("GIT_COMMITTER_NAME", "Continuo")
-        .env("GIT_AUTHOR_EMAIL", "continuo@users.noreply.github.com")
-        .env("GIT_COMMITTER_EMAIL", "continuo@users.noreply.github.com");
-    for key in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    ] {
-        command.env_remove(key);
-    }
-    Ok(command.output()?)
+
+#[derive(Serialize, Deserialize)]
+struct Checkpoint {
+    workspace_id: String,
+    known_revisions: BTreeSet<String>,
+    remote_tip: Option<String>,
+    checked_at_ms: u64,
 }
-fn git_bytes(repo: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let output = git_output(repo, args)?;
-    if !output.status.success() {
-        // Do not echo remote addresses or credential-helper diagnostics.
-        return Err(Error::new(
-            "git_failed",
-            format!(
-                "Git {} failed; check repository access and local Git authentication",
-                args[0]
-            ),
-        ));
-    }
-    Ok(output.stdout)
+fn workspace_id(remote: &str, key_id: &str) -> String {
+    format!("{:x}", Sha256::digest(format!("{remote}\n{key_id}")))
 }
-fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    String::from_utf8(git_bytes(repo, args)?).map_err(|_| {
-        Error::new(
-            "invalid_sync_repository",
-            "Git returned non-UTF-8 protocol metadata",
-        )
-    })
+fn checkpoint(store: &Store) -> Result<Option<Checkpoint>> {
+    store
+        .metadata("sync_checkpoint")?
+        .map(|v| Ok(serde_json::from_str(&v)?))
+        .transpose()
+}
+fn save_checkpoint(
+    store: &Store,
+    workspace: &str,
+    seen: &BTreeSet<String>,
+    tip: Option<String>,
+) -> Result<()> {
+    let value = Checkpoint {
+        workspace_id: workspace.into(),
+        known_revisions: seen.clone(),
+        remote_tip: tip,
+        checked_at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+    };
+    store.set_metadata("sync_checkpoint", &serde_json::to_string(&value)?)
+}
+pub fn config_revision(store: &Store) -> Result<String> {
+    Ok(store.metadata("sync_config_revision")?.unwrap_or(
+        if store.metadata("sync_config")?.is_some() {
+            "legacy"
+        } else {
+            "none"
+        }
+        .into(),
+    ))
+}
+pub fn set_enabled(store: &Store, expected: &str, enabled: bool) -> Result<Value> {
+    let _lease = control::lease(store)?;
+    let cfg = configured(store)?.config;
+    if enabled {
+        let key = crypto::read_key(Path::new(&cfg.key_file))?;
+        if store
+            .metadata("sync_key_id")?
+            .is_some_and(|id| id != crypto::key_id(&key))
+        {
+            return Err(Error::new(
+                "sync_key_changed",
+                "Restore the original configured key",
+            ));
+        }
+    }
+    let tx = Transaction::new_unchecked(&store.conn, TransactionBehavior::Immediate)?;
+    if config_revision(store)? != expected {
+        return Err(Error::new("sync_config_changed", "Settings changed"));
+    }
+    store.set_metadata("sync_enabled", if enabled { "true" } else { "false" })?;
+    let revision = Uuid::new_v4().to_string();
+    store.set_metadata("sync_config_revision", &revision)?;
+    tx.commit()?;
+    Ok(
+        json!({"enabled":enabled,"config_revision":revision,"device_revoked":false,"old_ciphertext_erased":false}),
+    )
+}
+pub fn run(store: &Store, id: Option<&str>, preview: bool, timeout: u64) -> Result<Value> {
+    configured(store)?.controlled(store, id, preview, timeout)
+}
+pub fn cancel(store: &Store, id: &str) -> Result<Value> {
+    control::cancel(store, id)
+}
+pub fn job(store: &Store, id: &str) -> Result<Value> {
+    control::job(store, id)
+}
+pub fn inspect(store: &Store) -> Result<Value> {
+    let config = store
+        .metadata("sync_config")?
+        .map(|v| serde_json::from_str::<GitConfig>(&v))
+        .transpose()?;
+    let mut key_status = json!({"ready":false,"code":"not_configured"});
+    let mut key_id = store.metadata("sync_key_id")?;
+    if let Some(cfg) = &config {
+        match crypto::read_key(Path::new(&cfg.key_file)) {
+            Ok(key) => {
+                let actual = crypto::key_id(&key);
+                key_status = if key_id.as_ref().is_some_and(|id| id != &actual) {
+                    json!({"ready":false,"code":"sync_key_changed"})
+                } else {
+                    json!({"ready":true})
+                };
+                if key_id.is_none() {
+                    key_id = Some(actual);
+                }
+            }
+            Err(e) => {
+                key_status = json!({"ready":false,"code":if e.code=="io_error"{"sync_key_missing"}else{&e.code}})
+            }
+        }
+    }
+    let cp = checkpoint(store)?.filter(|cp| {
+        config
+            .as_ref()
+            .zip(key_id.as_ref())
+            .is_some_and(|(c, k)| cp.workspace_id == workspace_id(&c.remote, k))
+    });
+    let events = store.events()?;
+    let ids: BTreeSet<_> = events.iter().map(|e| e.revision.clone()).collect();
+    let pending_upload = cp
+        .as_ref()
+        .map(|cp| ids.difference(&cp.known_revisions).count());
+    let pending_download = cp
+        .as_ref()
+        .map(|cp| cp.known_revisions.difference(&ids).count());
+    let entities = store.list(None, true)?;
+    let conflicts:Vec<_>=entities.iter().filter(|e|e.conflicted).map(|e|json!({"id":e.id,"kind":e.kind,"name":e.heads[0].name,"heads":e.heads.iter().map(|h|json!({"revision":h.revision,"deleted":h.deleted,"parents":h.parents,"device_id":h.device_id})).collect::<Vec<_>>()})).collect();
+    Ok(
+        json!({"configured":config.is_some(),"config":config,"config_revision":config_revision(store)?,"enabled":store.metadata("sync_enabled")?.as_deref()!=Some("false"),"key_status":key_status,"job":control::current(store)?,"last_success":store.metadata("last_sync")?.map(|v|serde_json::from_str::<Value>(&v)).transpose()?,"local_events":events.len(),"pending_upload":pending_upload,"pending_download":pending_download,"pending_basis":"last_validated_remote_snapshot_not_live","remote_tip":cp.as_ref().and_then(|c|c.remote_tip.clone()),"remote_checked_at_ms":cp.as_ref().map(|c|c.checked_at_ms),"conflicts":conflicts,"deleted_records":entities.iter().filter(|e|e.heads.iter().all(|h|h.deleted)).count(),"device_revocation_supported":false,"key_recovery_supported":false,"config_and_secrets_synchronized":false}),
+    )
 }

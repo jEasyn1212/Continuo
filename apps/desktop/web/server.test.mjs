@@ -52,7 +52,7 @@ async function fixture(t, permissions) {
     });
     return { status: response.status, body: await response.json() };
   };
-  return { ...server, data, dataDir, call, headers };
+  return { ...server, data, dataDir, call, headers, dir };
 }
 
 test("Web uses real core records, CLI shares data, and optimistic writes remain enforced", async (t) => {
@@ -223,7 +223,7 @@ test("production HTML and its compiled assets are served independently of Tauri"
   const bootstrap = await fetch(`${server.url}/api/bootstrap`, {
     headers: { "X-Continuo-Client": "web-v1" },
   });
-  assert.equal((await bootstrap.json()).data.server.version, "0.6.0");
+  assert.equal((await bootstrap.json()).data.server.version, "0.7.0");
 });
 
 test("Identity operations cross Web/MCP/CLI with local selection, real bindings and fail-closed preparation", async (t) => {
@@ -638,4 +638,89 @@ test("Session references and local environments share core across Web/MCP/CLI; n
     })
   ).body;
   assert.equal(stale.error.code, "revision_conflict");
+});
+
+test("Web synchronization is cancellable through the live MCP bridge and preserves local records", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "continuo-web-sync-wrapper-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const actualGit = spawnSync("sh", ["-c", "command -v git"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  const quoted = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
+  await writeFile(
+    path.join(dir, "git"),
+    '#!/bin/sh\nfor arg in "$@"; do\nif [ "$arg" = ls-remote ]; then /bin/sleep 10; break; fi\ndone\nexec ' +
+      quoted(actualGit) +
+      ' "$@"\n',
+    { mode: 0o700 },
+  );
+  const launcher = path.join(dir, "continuo");
+  await writeFile(
+    launcher,
+    "#!/bin/sh\nPATH=" +
+      quoted(dir + ":" + process.env.PATH) +
+      "\nexport PATH\nexec " +
+      quoted(binary) +
+      ' "$@"\n',
+    { mode: 0o700 },
+  );
+  const f = await fixture(t, {
+    binary: launcher,
+    writes: true,
+    admin: true,
+    sync: true,
+  });
+  const remote = path.join(f.dir, "storage.git"),
+    key = path.join(f.dir, "key");
+  assert.equal(
+    spawnSync(actualGit, ["init", "--bare", "--quiet", remote]).status,
+    0,
+  );
+  assert.equal(
+    (await f.call("sync.key_generate", { path: key })).body.ok,
+    true,
+  );
+  assert.equal(
+    (
+      await f.call("sync.configure", {
+        remote,
+        key_file: key,
+        expected_config_revision: "none",
+      })
+    ).body.ok,
+    true,
+  );
+  assert.equal(
+    (
+      await f.call("entity.create", {
+        kind: "task",
+        name: "Retain local",
+        data: {},
+      })
+    ).body.ok,
+    true,
+  );
+  const id = randomUUID(),
+    pending = f.call("sync.run", { run_id: id, timeout_ms: 5000 });
+  const deadline = Date.now() + 3000;
+  while ((await f.call("sync.inspect")).body.data.job?.phase !== "contacting") {
+    assert.ok(Date.now() < deadline);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(
+    (await f.call("sync.cancel", { run_id: id })).body.data.cancel_requested,
+    true,
+  );
+  assert.equal((await pending).body.error.code, "sync_cancelled");
+  assert.equal(
+    (await f.call("sync.job", { run_id: id })).body.data.state,
+    "cancelled",
+  );
+  assert.equal((await f.call("system.status")).body.data.event_count, 1);
+  const timed = await f.call("sync.preview", { timeout_ms: 150 });
+  assert.equal(timed.body.error.code, "sync_timeout");
+  assert.equal(
+    (await f.call("sync.inspect")).body.data.job.publication,
+    "not_attempted",
+  );
 });

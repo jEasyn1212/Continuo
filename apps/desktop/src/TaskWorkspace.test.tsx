@@ -14,6 +14,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { call, connect, Adapter, Entity, Event as StoredEvent } from "./api";
+import { SyncWorkspace } from "./SyncWorkspace";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
@@ -766,3 +767,176 @@ test("Session checks refresh when linked task changes and remove plans from the 
     (await call<Entity>("entity.get", { id: session.id })).heads[0].revision,
   ).toBe(session.heads[0].revision);
 });
+
+async function syncUi(allowed = true) {
+  await service.close();
+  service = await startWebServer({
+    binary,
+    assets: path.join(directory, "assets"),
+    dataDir,
+    port: 0,
+    writes: true,
+    admin: true,
+    sync: allowed,
+  });
+  await connect();
+  render(
+    <SyncWorkspace
+      writable={true}
+      admin={true}
+      networkAllowed={allowed}
+      refreshSignal={0}
+      onChange={async () => {}}
+      onOpenModule={() => {}}
+    />,
+  );
+}
+function fixtureGit(args: string[]) {
+  const result = spawnSync("git", args, { encoding: "utf8" });
+  expect(result.status).toBe(0);
+}
+function secondCall(vault: string, method: string, params: object = {}) {
+  const result = spawnSync(
+    binary,
+    ["--data-dir", vault, "--allow-sync", "call", method, "--input", "-"],
+    { encoding: "utf8", input: JSON.stringify(params) },
+  );
+  expect(result.status).toBe(0);
+  return JSON.parse(result.stdout).data;
+}
+async function configureSyncForm() {
+  const remote = path.join(directory, "storage.git"),
+    key = path.join(directory, "key");
+  fixtureGit(["init", "--bare", "--quiet", remote]);
+  await click("配置同步存储");
+  await fill("用户存储地址", remote);
+  await fill("本机工作区密钥文件", key);
+  await click("为新工作区生成密钥");
+  await click("保存同步配置");
+  await waitFor(() =>
+    expect(screen.queryByLabelText("用户存储地址")).toBeNull(),
+  );
+  return { remote, key };
+}
+test("Sync forms configure a real encrypted fixture, preview pending records, synchronize, pause and safely retry", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await call("entity.create", {
+    kind: "task",
+    name: "Real portable record",
+    data: { goal: "Check" },
+  });
+  await syncUi();
+  const { remote } = await configureSyncForm();
+  await click("检查远端待同步");
+  await waitFor(async () =>
+    expect((await call<any>("sync.inspect")).pending_upload).toBe(1),
+  );
+  const branches = spawnSync("git", ["--git-dir", remote, "branch", "--list"], {
+    encoding: "utf8",
+  });
+  expect(branches.stdout.trim()).toBe("");
+  await click("同步 / 安全重试");
+  await waitFor(async () =>
+    expect((await call<any>("sync.inspect")).pending_upload).toBe(0),
+  );
+  await click("停用本机同步");
+  await screen.findByRole("button", { name: "恢复本机同步" });
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "同步 / 安全重试",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect((await call<any>("sync.inspect")).device_revocation_supported).toBe(
+    false,
+  );
+  await click("恢复本机同步");
+  await click("同步 / 安全重试");
+  await waitFor(async () =>
+    expect((await call<any>("sync.inspect")).job.result.uploaded).toBe(0),
+  );
+}, 20000);
+test("Sync recovery previews explicit history, cancellation makes no write, and restore preserves the tombstone", async () => {
+  const record = await call<Entity>("entity.create", {
+    kind: "task",
+    name: "Restore work",
+    data: { goal: "Kept goal" },
+  });
+  const tombstone = await call<Entity>("entity.delete", {
+    id: record.id,
+    expected_revision: record.heads[0].revision,
+  });
+  await syncUi(false);
+  await fill("已删除的记录", record.id);
+  await fill("要恢复的历史 revision", record.heads[0].revision);
+  await click("查看历史版本");
+  await screen.findByLabelText("恢复版本预览");
+  await click("取消恢复");
+  expect(
+    (await call<Entity>("entity.get", { id: record.id })).heads[0].deleted,
+  ).toBe(true);
+  await fill("已删除的记录", record.id);
+  await fill("要恢复的历史 revision", record.heads[0].revision);
+  await click("查看历史版本");
+  await click("恢复所选版本");
+  await waitFor(async () =>
+    expect(
+      (await call<Entity>("entity.get", { id: record.id })).heads[0].deleted,
+    ).toBe(false),
+  );
+  const restored = await call<Entity>("entity.get", { id: record.id });
+  expect(restored.heads[0].parents).toEqual([tombstone.heads[0].revision]);
+  expect(
+    (await call<any>("entity.history", { id: record.id })).total_versions,
+  ).toBe(3);
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "同步 / 安全重试",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+});
+test("Sync conflicts keep both real encrypted device versions until an explicit merge references both", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await syncUi();
+  const { remote, key } = await configureSyncForm();
+  const a = await call<Entity>("entity.create", {
+    kind: "task",
+    name: "Concurrent work",
+    data: { goal: "Initial" },
+  });
+  await call("sync.run");
+  const other = path.join(directory, "other");
+  secondCall(other, "sync.configure", { remote, key_file: key });
+  secondCall(other, "sync.run");
+  await call("entity.update", {
+    id: a.id,
+    expected_revision: a.heads[0].revision,
+    data: { goal: "Mini choice" },
+  });
+  secondCall(other, "entity.update", {
+    id: a.id,
+    expected_revision: a.heads[0].revision,
+    data: { goal: "Air choice" },
+  });
+  secondCall(other, "sync.run");
+  await call("sync.run");
+  await click("刷新同步状态");
+  await click("核对并整理版本");
+  const conflicted = await call<Entity>("entity.get", { id: a.id });
+  expect(conflicted.heads).toHaveLength(2);
+  await fill("整理后的记录内容", JSON.stringify({ goal: "Keep both choices" }));
+  await click("保存冲突整理");
+  await waitFor(async () =>
+    expect((await call<Entity>("entity.get", { id: a.id })).conflicted).toBe(
+      false,
+    ),
+  );
+  const merged = await call<Entity>("entity.get", { id: a.id });
+  expect(merged.heads[0].parents.sort()).toEqual(
+    conflicted.heads.map((h) => h.revision).sort(),
+  );
+  expect(merged.heads[0].data.goal).toBe("Keep both choices");
+}, 20000);

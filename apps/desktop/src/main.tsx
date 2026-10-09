@@ -11,6 +11,7 @@ import {
   Status,
 } from "./api";
 import "./style.css";
+import { SyncWorkspace } from "./SyncWorkspace";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
@@ -84,9 +85,6 @@ function App() {
   const [cwd, setCwd] = useState("");
   const [prompt, setPrompt] = useState("");
   const [plan, setPlan] = useState<unknown>(null);
-  const [remote, setRemote] = useState("");
-  const [keyFile, setKeyFile] = useState("");
-  const [syncResult, setSyncResult] = useState<unknown>(null);
   const [apiMethod, setApiMethod] = useState("system.status");
   const [apiInput, setApiInput] = useState("{}");
   const [apiResult, setApiResult] = useState<unknown>(null);
@@ -929,97 +927,20 @@ function App() {
               </form>
             </>
           )}
-          {page === "sync" && (
-            <>
-              <div className="page-heading">
-                <div>
-                  <div className="eyebrow">YOUR STORAGE, YOUR DATA</div>
-                  <h1>把工作带到另一台设备。</h1>
-                  <p>使用你自己的存储。Continuo 首版无需部署统一服务端。</p>
-                </div>
-              </div>
-              <div className="sync-diagram">
-                <span>
-                  本机
-                  <br />
-                  <small>本地数据</small>
-                </span>
-                <b>⇄</b>
-                <span>
-                  你的 GitHub 私有仓库
-                  <br />
-                  <small>加密版本记录</small>
-                </span>
-                <b>⇄</b>
-                <span>
-                  另一台设备
-                  <br />
-                  <small>本地数据</small>
-                </span>
-              </div>
-              <form
-                className="settings-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void action(async () => {
-                    await call("sync.configure", { remote, key_file: keyFile });
-                    setSyncResult({ configured: true });
-                  });
-                }}
-              >
-                <h2>配置同步存储</h2>
-                <label>
-                  专用私有仓库地址
-                  <input
-                    required
-                    placeholder="https://github.com/you/continuo-data.git"
-                    value={remote}
-                    onChange={(e) => setRemote(e.target.value)}
-                  />
-                </label>
-                <label>
-                  本机加密密钥文件
-                  <input
-                    required
-                    placeholder="已有密钥文件的绝对路径"
-                    value={keyFile}
-                    onChange={(e) => setKeyFile(e.target.value)}
-                  />
-                </label>
-                <p className="help">
-                  开发预览使用本地密钥文件。两台设备需要同一把密钥；Git
-                  身份验证使用本机已有的 Git 认证。密钥不上传到仓库。
-                </p>
-                <div className="form-actions">
-                  <button disabled={busy || !connection?.permissions.admin}>
-                    保存配置
-                  </button>
-                  <button
-                    className="primary"
-                    type="button"
-                    disabled={
-                      busy ||
-                      !connection?.permissions.sync ||
-                      !status?.sync_configured
-                    }
-                    onClick={() =>
-                      void action(async () =>
-                        setSyncResult(await call("sync.run")),
-                      )
-                    }
-                  >
-                    {busy ? "正在处理…" : "立即同步 ⇄"}
-                  </button>
-                </div>
-                {syncResult != null && (
-                  <pre>{JSON.stringify(syncResult, null, 2)}</pre>
-                )}
-              </form>
-            </>
+          {page === "sync" && connected && (
+            <SyncWorkspace
+              writable={writable}
+              admin={!!connection?.permissions.admin}
+              networkAllowed={!!connection?.permissions.sync}
+              refreshSignal={status}
+              onChange={refresh}
+              onOpenModule={navigate}
+              onDirtyChange={setHasUnsaved}
+            />
           )}
         </div>
         <footer>
-          Continuo 0.6.0{" "}
+          Continuo 0.7.0{" "}
           <span>本地优先 · 用户自选存储 · App / Web / CLI / MCP 共享核心</span>
         </footer>
       </main>

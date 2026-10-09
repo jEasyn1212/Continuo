@@ -4,8 +4,7 @@ use crate::{
     model::KINDS,
     session,
     store::Store,
-    sync::{self, SyncBackend},
-    task, Error, Result,
+    sync, task, Error, Result,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -114,6 +113,9 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
             false,
             false,
         ),
+        op("entity.history", "List up to 200 causal history references; timestamps never decide conflict winners",json!({"id":string}), &["id"],false,false,false),
+        op("entity.history_version", "Read one caller-selected historical version belonging to the specified entity",json!({"id":string,"revision":string}), &["id","revision"],false,false,false),
+        op("entity.restore", "Restore a caller-selected live historical version from the exact current tombstone; preserve history and revalidate links",json!({"id":string,"expected_revision":string,"source_revision":string}), &["id","expected_revision","source_revision"],true,false,false),
         op(
             "entity.create",
             "Create a synchronized object; use credential references, never secrets",
@@ -214,6 +216,11 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
             false,
             false,
         ),
+        op("sync.inspect", "Read local settings, key readiness, last observed pending counts, conflicts and current job without network access",json!({}),&[],false,false,false),
+        op("sync.job", "Read the exact synchronization job and publication certainty before retrying",json!({"run_id":string}),&["run_id"],false,false,false),
+        op("sync.cancel", "Request cancellation of the exact running job; publication may already have completed",json!({"run_id":string}),&["run_id"],true,false,false),
+        op("sync.preview", "Validate the remote snapshot and pending counts without importing or publishing events",json!({"run_id":string,"timeout_ms":{"type":"integer","minimum":100,"maximum":90000}}),&[],true,true,false),
+        op("sync.set_enabled", "Pause or resume synchronization on this device; does not revoke keys or erase remote history",json!({"expected_config_revision":string,"enabled":{"type":"boolean"}}),&["expected_config_revision","enabled"],true,false,true),
         op(
             "sync.key_generate",
             "Generate a non-overwriting 32-byte key file; keep it outside the Git repository",
@@ -226,7 +233,7 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op(
             "sync.configure",
             "Configure user-owned GitHub storage and an existing local encryption key",
-            json!({"remote":string,"key_file":string}),
+            json!({"remote":string,"key_file":string,"expected_config_revision":string}),
             &["remote", "key_file"],
             true,
             false,
@@ -234,8 +241,8 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         ),
         op(
             "sync.run",
-            "Exchange encrypted immutable events with the configured user-owned Git repository",
-            json!({}),
+            "Exchange encrypted immutable events with bounded cancellation; uncertain publication is resolved by safe refetch and deduplication",
+            json!({"run_id":string,"timeout_ms":{"type":"integer","minimum":100,"maximum":90000}}),
             &[],
             true,
             true,
@@ -311,6 +318,15 @@ impl Service {
                 json!({"entities":self.store.list(params.get("kind").and_then(Value::as_str),params.get("include_deleted").and_then(Value::as_bool).unwrap_or(false))?}),
             ),
             "entity.get" => Ok(serde_json::to_value(self.store.get(text("id")?)?)?),
+            "entity.history" => self.store.history(text("id")?),
+            "entity.history_version" => Ok(serde_json::to_value(
+                self.store.history_version(text("id")?, text("revision")?)?,
+            )?),
+            "entity.restore" => Ok(serde_json::to_value(self.store.restore(
+                text("id")?,
+                text("expected_revision")?,
+                text("source_revision")?,
+            )?)?),
             "entity.create" => Ok(serde_json::to_value(self.store.create(
                 text("kind")?,
                 text("name")?,
@@ -703,8 +719,31 @@ impl Service {
                 crypto::generate_key(Path::new(text("path")?))?;
                 Ok(json!({"created":true,"key_material_returned":false}))
             }
-            "sync.configure" => sync::configure(&self.store, text("remote")?, text("key_file")?),
-            "sync.run" => sync::configured(&self.store)?.run(&self.store),
+            "sync.configure" => sync::configure_checked(
+                &self.store,
+                text("remote")?,
+                text("key_file")?,
+                params
+                    .get("expected_config_revision")
+                    .and_then(Value::as_str),
+            ),
+            "sync.inspect" => sync::inspect(&self.store),
+            "sync.job" => sync::job(&self.store, text("run_id")?),
+            "sync.cancel" => sync::cancel(&self.store, text("run_id")?),
+            "sync.set_enabled" => sync::set_enabled(
+                &self.store,
+                text("expected_config_revision")?,
+                params["enabled"].as_bool().unwrap(),
+            ),
+            "sync.run" | "sync.preview" => sync::run(
+                &self.store,
+                params.get("run_id").and_then(Value::as_str),
+                method == "sync.preview",
+                params
+                    .get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(30000),
+            ),
             _ => Err(Error::new("unknown_method", "Unknown API method")),
         }
     }

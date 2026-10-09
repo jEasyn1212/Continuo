@@ -222,6 +222,104 @@ impl Store {
         tx.commit()?;
         self.get(id)
     }
+    fn history_events(&self, id: &str) -> Result<Vec<Event>> {
+        self.get(id)?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT payload FROM events WHERE entity_id=?1 ORDER BY revision")?;
+        let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+        rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
+    }
+    pub fn history_version(&self, id: &str, revision: &str) -> Result<Event> {
+        self.history_events(id)?
+            .into_iter()
+            .find(|e| e.revision == revision)
+            .ok_or_else(|| {
+                Error::new(
+                    "history_version_missing",
+                    "Version does not belong to this entity",
+                )
+            })
+    }
+    pub fn history(&self, id: &str) -> Result<Value> {
+        let events = self.history_events(id)?;
+        let mut ready: BTreeSet<String> = events
+            .iter()
+            .filter(|e| e.parents.is_empty())
+            .map(|e| e.revision.clone())
+            .collect();
+        let mut degree: BTreeMap<String, usize> = events
+            .iter()
+            .map(|e| (e.revision.clone(), e.parents.len()))
+            .collect();
+        let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for e in &events {
+            for p in &e.parents {
+                children
+                    .entry(p.clone())
+                    .or_default()
+                    .push(e.revision.clone());
+            }
+        }
+        let by_revision: BTreeMap<_, _> = events.iter().map(|e| (e.revision.clone(), e)).collect();
+        let mut ordered = vec![];
+        while let Some(revision) = ready.pop_first() {
+            let e = by_revision[&revision];
+            ordered.push(json!({"revision":e.revision,"name":e.name,"deleted":e.deleted,"parents":if e.parents.len()<=128{Some(&e.parents)}else{None},"parent_count":e.parents.len(),"device_id":e.device_id,"timestamp_ms":e.timestamp_ms}));
+            if let Some(items) = children.get(&revision) {
+                for child in items {
+                    let d = degree.get_mut(child).unwrap();
+                    *d -= 1;
+                    if *d == 0 {
+                        ready.insert(child.clone());
+                    }
+                }
+            }
+        }
+        if ordered.len() != events.len() {
+            return Err(Error::new(
+                "invalid_event",
+                "Local entity history is incomplete or cyclic",
+            ));
+        }
+        let truncated = ordered.len() > 200;
+        let records = ordered.into_iter().rev().take(200).collect::<Vec<_>>();
+        Ok(
+            json!({"id":id,"versions":records,"total_versions":events.len(),"truncated":truncated,"order":"reverse_causal_topology_uuid_ties","timestamp_is_display_only":true}),
+        )
+    }
+    pub fn restore(&self, id: &str, expected: &str, source: &str) -> Result<EntityView> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let view = self.get(id)?;
+        if view.conflicted || !view.heads[0].deleted || view.heads[0].revision != expected {
+            return Err(Error::new(
+                "revision_conflict",
+                "Restore requires the exact single current tombstone",
+            ));
+        }
+        let source = self.history_version(id, source)?;
+        if source.deleted {
+            return Err(Error::new(
+                "invalid_restore_source",
+                "Choose a nondeleted historical version",
+            ));
+        }
+        let event = self.new_event(
+            id.into(),
+            &view.kind,
+            &source.name,
+            source.data,
+            false,
+            vec![expected.into()],
+        )?;
+        crate::identity::validate_local(self, &event)?;
+        crate::task::validate_local(self, &event)?;
+        crate::session::validate_local(self, &event)?;
+        crate::capability::validate_local(self, &event)?;
+        self.insert(&event)?;
+        tx.commit()?;
+        self.get(id)
+    }
     fn new_event(
         &self,
         id: String,
@@ -262,8 +360,21 @@ impl Store {
         Ok(())
     }
     /// Validate the complete causal graph before committing any remote event.
+    pub fn validate_import(&self, incoming: &[Event]) -> Result<usize> {
+        self.import_checked(incoming, false)
+    }
     pub fn import_events(&self, incoming: &[Event]) -> Result<usize> {
-        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        self.import_checked(incoming, true)
+    }
+    fn import_checked(&self, incoming: &[Event], write: bool) -> Result<usize> {
+        let tx = Transaction::new_unchecked(
+            &self.conn,
+            if write {
+                TransactionBehavior::Immediate
+            } else {
+                TransactionBehavior::Deferred
+            },
+        )?;
         let existing = self.events()?;
         let mut graph: BTreeMap<String, Event> = existing
             .into_iter()
@@ -341,8 +452,10 @@ impl Store {
                 "Event history contains a cycle",
             ));
         }
-        for event in &added {
-            self.insert(event)?;
+        if write {
+            for event in &added {
+                self.insert(event)?;
+            }
         }
         tx.commit()?;
         Ok(added.len())

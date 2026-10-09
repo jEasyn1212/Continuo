@@ -152,7 +152,7 @@ fn handle(
             if params.get("cursor").is_some() {
                 return Some(error(id, -32602, "This catalog is not paginated"));
             }
-            let tools: Vec<_>=service.available().into_iter().map(|o|json!({"name":o.tool,"description":o.description,"inputSchema":o.input_schema,"annotations":{"readOnlyHint":!o.writes,"destructiveHint":o.method=="entity.delete"||o.method=="entity.update"||o.method=="entity.resolve"||o.execution,"idempotentHint":!o.writes,"openWorldHint":o.network||o.execution}})).collect();
+            let tools: Vec<_>=service.available().into_iter().map(|o|json!({"name":o.tool,"description":o.description,"inputSchema":o.input_schema,"annotations":{"readOnlyHint":!o.writes,"destructiveHint":o.method=="entity.delete"||o.method=="entity.update"||o.method=="entity.resolve"||o.method=="entity.restore"||o.execution,"idempotentHint":!o.writes,"openWorldHint":o.network||o.execution}})).collect();
             Some(success(id, json!({"tools":tools})))
         }
         "tools/call" => {
@@ -166,19 +166,20 @@ fn handle(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            if op.method == "mcp.probe" {
+            if ["mcp.probe", "sync.run", "sync.preview"].contains(&op.method) {
                 if pending.load(Ordering::SeqCst) >= 4 {
-                    return Some(error(id, -32000, "Too many concurrent connection checks"));
+                    return Some(error(id, -32000, "Too many concurrent bounded operations"));
                 }
-                // Only bounded probes run independently; cancellation and ordinary CAS writes remain available.
+                // Bounded external operations run independently so cancellation and CAS writes remain responsive.
                 workers.retain(|w| !w.is_finished());
                 pending.fetch_add(1, Ordering::SeqCst);
                 let pending = pending.clone();
                 let output = output.clone();
                 let path = service.store.data_dir.clone();
                 let policy = service.policy;
+                let method = op.method;
                 workers.push(std::thread::spawn(move|| {
-                    let result=Service::open(&path,policy).and_then(|s|s.call("mcp.probe",arguments));
+                    let result=Service::open(&path,policy).and_then(|s|s.call(method,arguments));
                     let is_error=result.is_err();let data=envelope(result);
                     let reply=success(id,json!({"content":[{"type":"text","text":data.to_string()}],"structuredContent":data,"isError":is_error}));
                     if let Ok(mut writer)=output.lock(){let _=writeln!(writer,"{reply}");let _=writer.flush();}

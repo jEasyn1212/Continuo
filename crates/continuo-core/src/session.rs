@@ -181,7 +181,11 @@ pub(crate) fn validate_local(store: &Store, event: &Event) -> Result<()> {
         }
     }
     if event.parents.len() == 1 {
-        let old = Profile::parse(&store.get(&event.entity_id)?.heads[0].data)?;
+        let previous = store.get(&event.entity_id)?;
+        if previous.heads[0].deleted {
+            return Ok(());
+        }
+        let old = Profile::parse(&previous.heads[0].data)?;
         if old.status != p.status {
             if !next_states(&old.status).contains(&p.status.as_str()) {
                 return Err(Error::new(
