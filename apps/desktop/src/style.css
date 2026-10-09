@@ -1008,3 +1008,30 @@ button.danger {
     grid-template-columns: 1fr;
   }
 }
+.mcp-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.mcp-status-grid div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  min-width: 0;
+}
+.mcp-status-grid small,
+.mcp-status-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.mcp-status-grid strong {
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: 8px;
+}
+@media (max-width: 500px) {
+  .mcp-status-grid {
+    grid-template-columns: 1fr;
+  }
+}

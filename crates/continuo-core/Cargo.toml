@@ -15,3 +15,9 @@ base64 = "0.22"
 sha2 = "0.10"
 fs2 = "0.4"
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+toml = { version = "=0.9.12", default-features = false, features = ["parse", "serde", "std"] }

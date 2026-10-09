@@ -21,7 +21,7 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("Continuo {}\n\ncontinuo [--data-dir PATH] status|agents|describe\ncontinuo [--data-dir PATH] call METHOD [--input FILE|-] [--allow-sync]\ncontinuo [--data-dir PATH] mcp [--allow-writes] [--allow-sync] [--allow-admin]\n\nInput is a JSON object; omitted input defaults to {{}}. All API responses are JSON.\nMCP defaults to read-only; --allow-sync and --allow-admin require --allow-writes.\nSecrets and existing agent configurations are not imported.", env!("CARGO_PKG_VERSION"));
+        println!("Continuo {}\n\ncontinuo [--data-dir PATH] status|agents|describe\ncontinuo [--data-dir PATH] call METHOD [--input FILE|-] [--allow-sync] [--allow-mcp-probes]\ncontinuo [--data-dir PATH] mcp [--allow-writes] [--allow-sync] [--allow-admin] [--allow-mcp-probes]\n\nInput is a JSON object; omitted input defaults to {{}}. All API responses are JSON.\nMCP defaults to read-only; --allow-sync and --allow-admin require --allow-writes.\nSecrets and existing agent configurations are not imported.", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let data_dir = take_value(&mut args, "--data-dir")?
@@ -30,6 +30,7 @@ fn run() -> Result<()> {
     let writes = take_flag(&mut args, "--allow-writes");
     let sync = take_flag(&mut args, "--allow-sync");
     let admin = take_flag(&mut args, "--allow-admin");
+    let probes = take_flag(&mut args, "--allow-mcp-probes");
     let input = take_value(&mut args, "--input")?;
     let command = args.first().map(String::as_str).unwrap_or("");
     if command == "describe" {
@@ -66,6 +67,12 @@ fn run() -> Result<()> {
             "MCP administration requires --allow-writes and --allow-admin",
         ));
     }
+    if probes && command == "mcp" && (!writes || !admin) {
+        return Err(Error::new(
+            "usage",
+            "--allow-mcp-probes requires --allow-writes and --allow-admin",
+        ));
+    }
     let path = match data_dir {
         Some(path) => path,
         None => continuo_core::default_data_dir()?,
@@ -75,10 +82,12 @@ fn run() -> Result<()> {
             writes,
             sync,
             admin,
+            probes,
         }
     } else {
         Policy {
             sync,
+            probes,
             ..Policy::local_user()
         }
     };

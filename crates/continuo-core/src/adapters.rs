@@ -33,6 +33,18 @@ pub trait AgentAdapter: Send + Sync {
     fn descriptor(&self) -> Descriptor;
     fn prepare_launch(&self, request: &LaunchRequest) -> Result<LaunchPlan>;
     fn mcp_registration(&self, executable: &str, args: &[String]) -> Value;
+    fn prepare_mcp(
+        &self,
+        _key: &str,
+        _executable: &str,
+        _args: &[String],
+        _cwd: Option<&str>,
+    ) -> Result<Value> {
+        Err(Error::new(
+            "mcp_adapter_unsupported",
+            "Adapter does not implement MCP definition registration",
+        ))
+    }
     fn prepare_capability(
         &self,
         _event: &crate::model::Event,
@@ -134,6 +146,19 @@ fn base(descriptor: &Descriptor, r: &LaunchRequest) -> Result<LaunchPlan> {
     Ok(LaunchPlan {agent:descriptor.id.into(),executable:descriptor.executable.into(),args:vec![],cwd:r.cwd.clone(),env:BTreeMap::new(),executed:false,warnings:vec!["Plan only: verify the installed runtime version, login and permissions before executing.".into(),"Identity instructions are context, not account switching or security isolation.".into()]})
 }
 impl AgentAdapter for ClaudeCode {
+    fn prepare_mcp(
+        &self,
+        key: &str,
+        executable: &str,
+        args: &[String],
+        cwd: Option<&str>,
+    ) -> Result<Value> {
+        if cwd.is_some() {
+            return Err(Error::new("mcp_adapter_unsupported", "This registration schema does not safely represent a working directory; clear cwd or use an explicitly reviewed launcher"));
+        }
+        let entry = json!({"type":"stdio","command":executable,"args":args});
+        Ok(registration("json", "mcpServers", key, entry))
+    }
     fn prepare_capability(
         &self,
         event: &crate::model::Event,
@@ -172,6 +197,19 @@ impl AgentAdapter for ClaudeCode {
     }
 }
 impl AgentAdapter for Codex {
+    fn prepare_mcp(
+        &self,
+        key: &str,
+        executable: &str,
+        args: &[String],
+        cwd: Option<&str>,
+    ) -> Result<Value> {
+        if cwd.is_some() {
+            return Err(Error::new("mcp_adapter_unsupported", "This registration schema does not safely represent a working directory; clear cwd or use an explicitly reviewed launcher"));
+        }
+        let entry = json!({"command":executable,"args":args});
+        Ok(registration("toml", "mcp_servers", key, entry))
+    }
     fn prepare_capability(
         &self,
         event: &crate::model::Event,
@@ -217,6 +255,19 @@ impl AgentAdapter for Codex {
     }
 }
 impl AgentAdapter for Hermes {
+    fn prepare_mcp(
+        &self,
+        key: &str,
+        executable: &str,
+        args: &[String],
+        cwd: Option<&str>,
+    ) -> Result<Value> {
+        if cwd.is_some() {
+            return Err(Error::new("mcp_adapter_unsupported", "This registration schema does not safely represent a working directory; clear cwd or use an explicitly reviewed launcher"));
+        }
+        let entry = json!({"command":executable,"args":args,"enabled":true});
+        Ok(registration("yaml", "mcp_servers", key, entry))
+    }
     fn prepare_capability(
         &self,
         event: &crate::model::Event,
@@ -261,4 +312,23 @@ fn capability_application(
     strategy: &str,
 ) -> Value {
     json!({"id":event.entity_id,"revision":event.revision,"name":event.name,"version":p.version,"capability_type":p.capability_type,"digest":p.reviewed_digest,"source_ref":p.source_ref,"source_revision":p.source_revision,"source_license":p.source_license,"strategy":strategy,"instructions":format!("Capability: {} [{} / {}]\n{}",event.name,p.capability_type,p.version,p.body),"permissions_granted":false,"scripts_executed":false})
+}
+
+fn registration(format: &str, root: &str, key: &str, entry: Value) -> Value {
+    let document = json!({root:{key:entry}});
+    let native_text = if format == "toml" {
+        let mut text = format!("[{}.{}]\n", root, serde_json::to_string(key).unwrap());
+        for (field, value) in document[root][key].as_object().unwrap() {
+            text.push_str(&format!(
+                "{} = {}\n",
+                serde_json::to_string(field).unwrap(),
+                value
+            ));
+        }
+        text
+    } else {
+        // JSON is also a valid YAML document; this typed subset avoids YAML quoting ambiguity.
+        serde_json::to_string_pretty(&document).unwrap() + "\n"
+    };
+    json!({"format":format,"document":document,"native_text":native_text,"runtime_verified":false})
 }

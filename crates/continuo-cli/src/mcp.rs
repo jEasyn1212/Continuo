@@ -3,14 +3,23 @@ use continuo_core::{
     Result,
 };
 use serde_json::{json, Value};
-use std::io::{BufRead, Write};
+use std::{
+    io::{BufRead, Write},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    thread::JoinHandle,
+};
 
 const VERSIONS: [&str; 3] = ["2025-11-25", "2025-06-18", "2025-03-26"];
 const LIMIT: usize = 1024 * 1024;
 
 pub fn serve(service: &Service) -> Result<()> {
     let mut input = std::io::stdin().lock();
-    let mut output = std::io::stdout().lock();
+    let output = Arc::new(Mutex::new(std::io::stdout()));
+    let pending = Arc::new(AtomicUsize::new(0));
+    let mut workers: Vec<JoinHandle<()>> = vec![];
     let mut initialized = false;
     let mut ready = false;
     loop {
@@ -46,10 +55,21 @@ pub fn serve(service: &Service) -> Result<()> {
         } else {
             match serde_json::from_slice::<Value>(&line) {
                 Err(_) => Some(error(Value::Null, -32700, "Invalid JSON")),
-                Ok(request) => handle(service, request, &mut initialized, &mut ready),
+                Ok(request) => handle(
+                    service,
+                    request,
+                    &mut initialized,
+                    &mut ready,
+                    &output,
+                    &pending,
+                    &mut workers,
+                ),
             }
         };
         if let Some(response) = response {
+            let mut output = output.lock().map_err(|_| {
+                continuo_core::Error::new("io_error", "Protocol output lock failed")
+            })?;
             writeln!(output, "{response}")?;
             output.flush()?;
         }
@@ -57,9 +77,20 @@ pub fn serve(service: &Service) -> Result<()> {
             break;
         }
     }
+    for worker in workers {
+        let _ = worker.join();
+    }
     Ok(())
 }
-fn handle(service: &Service, r: Value, initialized: &mut bool, ready: &mut bool) -> Option<Value> {
+fn handle(
+    service: &Service,
+    r: Value,
+    initialized: &mut bool,
+    ready: &mut bool,
+    output: &Arc<Mutex<std::io::Stdout>>,
+    pending: &Arc<AtomicUsize>,
+    workers: &mut Vec<JoinHandle<()>>,
+) -> Option<Value> {
     let id = r.get("id").cloned();
     let method = r.get("method").and_then(Value::as_str);
     if !r.is_object()
@@ -121,7 +152,7 @@ fn handle(service: &Service, r: Value, initialized: &mut bool, ready: &mut bool)
             if params.get("cursor").is_some() {
                 return Some(error(id, -32602, "This catalog is not paginated"));
             }
-            let tools: Vec<_>=service.available().into_iter().map(|o|json!({"name":o.tool,"description":o.description,"inputSchema":o.input_schema,"annotations":{"readOnlyHint":!o.writes,"destructiveHint":o.method=="entity.delete"||o.method=="entity.update"||o.method=="entity.resolve","idempotentHint":!o.writes,"openWorldHint":o.network}})).collect();
+            let tools: Vec<_>=service.available().into_iter().map(|o|json!({"name":o.tool,"description":o.description,"inputSchema":o.input_schema,"annotations":{"readOnlyHint":!o.writes,"destructiveHint":o.method=="entity.delete"||o.method=="entity.update"||o.method=="entity.resolve"||o.execution,"idempotentHint":!o.writes,"openWorldHint":o.network||o.execution}})).collect();
             Some(success(id, json!({"tools":tools})))
         }
         "tools/call" => {
@@ -135,6 +166,26 @@ fn handle(service: &Service, r: Value, initialized: &mut bool, ready: &mut bool)
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            if op.method == "mcp.probe" {
+                if pending.load(Ordering::SeqCst) >= 4 {
+                    return Some(error(id, -32000, "Too many concurrent connection checks"));
+                }
+                // Only bounded probes run independently; cancellation and ordinary CAS writes remain available.
+                workers.retain(|w| !w.is_finished());
+                pending.fetch_add(1, Ordering::SeqCst);
+                let pending = pending.clone();
+                let output = output.clone();
+                let path = service.store.data_dir.clone();
+                let policy = service.policy;
+                workers.push(std::thread::spawn(move|| {
+                    let result=Service::open(&path,policy).and_then(|s|s.call("mcp.probe",arguments));
+                    let is_error=result.is_err();let data=envelope(result);
+                    let reply=success(id,json!({"content":[{"type":"text","text":data.to_string()}],"structuredContent":data,"isError":is_error}));
+                    if let Ok(mut writer)=output.lock(){let _=writeln!(writer,"{reply}");let _=writer.flush();}
+                    pending.fetch_sub(1,Ordering::SeqCst);
+                }));
+                return None;
+            }
             let result = service.call(op.method, arguments);
             let is_error = result.is_err();
             let data = envelope(result);

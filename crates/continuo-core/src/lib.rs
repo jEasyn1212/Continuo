@@ -3,6 +3,7 @@ pub mod api;
 pub mod capability;
 pub mod crypto;
 pub mod identity;
+pub mod mcp;
 pub mod model;
 pub mod store;
 pub mod sync;

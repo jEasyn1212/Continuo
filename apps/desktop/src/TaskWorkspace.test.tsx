@@ -14,6 +14,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { call, connect, Adapter, Entity, Event as StoredEvent } from "./api";
+import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { IdentityWorkspace } from "./IdentityWorkspace";
@@ -457,4 +458,124 @@ test("Capability compatibility is checked in forms against the registered adapte
   ).toBe(true);
   await fill("检查目标 agent", "codex");
   await screen.findByText("当前正文与依赖已检查，可加入启动计划。");
+});
+
+async function enableIsolatedProbes() {
+  await service.close();
+  service = await startWebServer({
+    binary,
+    assets: path.join(directory, "assets"),
+    dataDir,
+    port: 0,
+    writes: true,
+    admin: true,
+    probes: true,
+  });
+  await connect();
+}
+test("MCP forms separate synced definitions, local maps, manual checks and registration plans against the real core", async () => {
+  await enableIsolatedProbes();
+  render(
+    <McpWorkspace
+      writable
+      admin
+      probes
+      adapters={adapters}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  await click("＋ 新建 MCP");
+  await fill("MCP 名称", "Local fixture tools");
+  await fill("注册名称", "fixture-tools");
+  await fill("程序提示", "continuo");
+  await click("保存 MCP 定义");
+  await click("配置本机映射");
+  await fill("可执行文件", binary);
+  await fill(
+    "命令参数（JSON 数组）",
+    JSON.stringify([
+      "--data-dir",
+      path.join(directory, "isolated-mcp-server"),
+      "mcp",
+    ]),
+  );
+  await click("保存本机映射");
+  await click("生成 MCP 注册计划");
+  await screen.findByText(/"config_written": false/);
+  expect(
+    (screen.getByLabelText("可复制的注册文档") as HTMLTextAreaElement).value,
+  ).toContain("fixture-tools");
+  const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await click("检查连接（需确认）");
+  expect(confirmation.mock.calls[0][0]).toContain(binary);
+  const all = (
+    await call<{ entities: Entity[] }>("entity.list", { kind: "mcp" })
+  ).entities;
+  expect(
+    (
+      await call<{ connection: { state: string } }>("mcp.inspect", {
+        id: all[0].id,
+        target_agent: "codex",
+      })
+    ).connection.state,
+  ).toBe("not_checked");
+  confirmation.mockReturnValue(true);
+  await click("检查连接（需确认）");
+  await screen.findByText("检查成功");
+  await click("清除本机映射");
+  await screen.findByText("这台设备尚未配置运行命令");
+  expect(
+    screen
+      .getByRole("button", { name: "检查连接（需确认）" })
+      .matches(":disabled"),
+  ).toBe(true);
+});
+
+test("MCP connection check cancellation remains available while the protocol request is pending", async () => {
+  await enableIsolatedProbes();
+  const file = path.join(directory, "isolated-hanging-server.mjs");
+  await writeFile(file, "process.stdin.resume();\n");
+  const record = await call<Entity>("entity.create", {
+    kind: "mcp",
+    name: "Hanging fixture",
+    data: { server_key: "hanging-fixture" },
+  });
+  await call("mcp.map", {
+    id: record.id,
+    expected_revision: record.heads[0].revision,
+    expected_mapping_revision: "none",
+    mapping: { executable: process.execPath, args: [file] },
+  });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  render(
+    <McpWorkspace
+      writable
+      admin
+      probes
+      adapters={adapters}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  await click(/Hanging fixture/);
+  await click("检查连接（需确认）");
+  await screen.findByRole("button", { name: "取消连接检查" });
+  await waitFor(async () =>
+    expect(
+      (
+        await call<{ connection: { state: string } }>("mcp.inspect", {
+          id: record.id,
+          target_agent: "codex",
+        })
+      ).connection.state,
+    ).toBe("running"),
+  );
+  await click("取消连接检查");
+  await screen.findByText("已取消");
+  const inspect = await call<{ connection: { state: string } }>("mcp.inspect", {
+    id: record.id,
+    target_agent: "codex",
+  });
+  expect(inspect.connection.state).toBe("cancelled");
 });

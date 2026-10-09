@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, mkdir, symlink, rm } from "node:fs/promises";
@@ -66,6 +67,7 @@ test("Web uses real core records, CLI shares data, and optimistic writes remain 
     writes: true,
     admin: true,
     sync: false,
+    probes: false,
   });
   const created = (
     await f.call("entity.create", {
@@ -221,7 +223,7 @@ test("production HTML and its compiled assets are served independently of Tauri"
   const bootstrap = await fetch(`${server.url}/api/bootstrap`, {
     headers: { "X-Continuo-Client": "web-v1" },
   });
-  assert.equal((await bootstrap.json()).data.server.version, "0.4.0");
+  assert.equal((await bootstrap.json()).data.server.version, "0.5.0");
 });
 
 test("Identity operations cross Web/MCP/CLI with local selection, real bindings and fail-closed preparation", async (t) => {
@@ -482,4 +484,62 @@ test("Capability text import and review travel through Web/MCP; CLI reads proven
     ).body.error.code,
     "capability_not_ready",
   );
+});
+
+test("MCP definitions, local mapping, registration and bounded checks have separate authorization; cancellation stays responsive", async (t) => {
+  const f = await fixture(t, { writes: true, admin: true, probes: true });
+  const serverFile = path.join(
+    path.dirname(f.dataDir),
+    "isolated-hanging-mcp.mjs",
+  );
+  await writeFile(serverFile, "process.stdin.resume();\n");
+  const e = (
+    await f.call("entity.create", {
+      kind: "mcp",
+      name: "Isolated fixture",
+      data: { server_key: "fixture-server" },
+    })
+  ).body.data;
+  const m = (
+    await f.call("mcp.map", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      expected_mapping_revision: "none",
+      mapping: { executable: process.execPath, args: [serverFile] },
+    })
+  ).body.data.mapping;
+  const prepared = (
+    await f.call("mcp.prepare", { id: e.id, target_agent: "codex" })
+  ).body.data;
+  assert.equal(prepared.config_written, false);
+  const probeId = randomUUID();
+  const checking = f.call("mcp.probe", {
+    id: e.id,
+    expected_revision: e.heads[0].revision,
+    expected_mapping_revision: m.revision,
+    probe_id: probeId,
+    confirm_execution: true,
+    timeout_ms: 2000,
+  });
+  let running;
+  for (let i = 0; i < 50; i++) {
+    running = (await f.call("mcp.inspect", { id: e.id, target_agent: "codex" }))
+      .body.data;
+    if (running.connection.state === "running") break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(running.connection.state, "running");
+  assert.equal(
+    (await f.call("mcp.cancel", { id: e.id, probe_id: probeId })).body.ok,
+    true,
+  );
+  const result = (await checking).body.data;
+  assert.equal(result.state, "cancelled");
+  assert.equal(result.tools_called, false);
+  const normal = await fixture(t, { writes: true, admin: true });
+  assert.equal(
+    normal.data.tools.some((tool) => tool.name === "continuo_mcp_probe"),
+    false,
+  );
+  assert.equal((await normal.call("mcp.probe", {})).body.ok, false);
 });

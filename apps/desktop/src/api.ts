@@ -47,7 +47,12 @@ export interface Tool {
 }
 export interface Connection {
   mode: "app" | "web";
-  permissions: { writes: boolean; admin: boolean; sync: boolean };
+  permissions: {
+    writes: boolean;
+    admin: boolean;
+    sync: boolean;
+    probes?: boolean;
+  };
   tools?: Tool[];
 }
 let webToken: string | null = null;
@@ -62,7 +67,7 @@ export async function connect(): Promise<Connection> {
     }>("system.describe");
     return {
       mode: "app",
-      permissions: { writes: true, admin: true, sync: true },
+      permissions: { writes: true, admin: true, sync: true, probes: true },
       tools: catalog.operations.map((op) => ({
         name: op.tool,
         description: op.description,
@@ -133,6 +138,21 @@ export async function call<T>(
       identity_bindings_unavailable:
         "关联的能力或 MCP 缺失、已删除或存在冲突。请检查关联并修复。",
       invalid_identity: "请选择没有冲突且仍有效的身份。",
+      invalid_mcp_profile:
+        "请检查 MCP 定义。注册名称不含空格，本机路径留在映射中，敏感值使用引用。",
+      invalid_mcp_mapping:
+        "请检查本机绝对路径、参数数组与 NAME=env:VARIABLE 引用。",
+      mcp_mapping_conflict:
+        "定义或本机映射已经变化，草稿已保留，请重新核对版本。",
+      mcp_unavailable: "MCP 定义已删除或存在并发版本，请先修复。",
+      mcp_not_ready: "MCP 定义或本机环境尚未就绪，请先处理检查项。",
+      mcp_adapter_unsupported:
+        "适配器尚未支持这些字段。cwd 暂不能安全写入注册格式，请留空或使用自己审查过的启动器。",
+      mcp_confirmation_required: "运行服务命令前，需要明确确认这一版命令。",
+      mcp_probe_platform_unsupported:
+        "当前只支持 macOS/Linux 的有界连接检查，其他平台可先保存定义和注册计划。",
+      mcp_busy: "这个 MCP 的连接检查已在运行，可等待或取消。",
+      mcp_probe_conflict: "这次连接检查已经结束或被替换，请刷新状态。",
       invalid_capability_profile:
         "请检查能力正文、版本、来源与依赖字段。来源使用不含凭据或查询参数的 HTTPS 地址或 project:相对路径。",
       capability_unavailable: "能力已删除、类型错误或存在并发版本，请先修复。",

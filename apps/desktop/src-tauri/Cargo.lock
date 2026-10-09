@@ -387,11 +387,12 @@ dependencies = [
 
 [[package]]
 name = "continuo-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "fs2",
+ "libc",
  "rand",
  "rusqlite",
  "serde",
@@ -403,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "continuo-desktop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "continuo-core",
  "serde_json",

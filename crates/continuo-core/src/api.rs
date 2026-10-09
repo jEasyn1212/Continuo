@@ -1,6 +1,6 @@
 use crate::{
     adapters::{LaunchRequest, Registry},
-    capability, crypto, identity,
+    capability, crypto, identity, mcp,
     model::KINDS,
     store::Store,
     sync::{self, SyncBackend},
@@ -15,6 +15,7 @@ pub struct Policy {
     pub writes: bool,
     pub sync: bool,
     pub admin: bool,
+    pub probes: bool,
 }
 impl Policy {
     pub fn local_user() -> Self {
@@ -22,6 +23,7 @@ impl Policy {
             writes: true,
             sync: false,
             admin: true,
+            probes: false,
         }
     }
     pub fn read_only() -> Self {
@@ -29,6 +31,7 @@ impl Policy {
             writes: false,
             sync: false,
             admin: false,
+            probes: false,
         }
     }
 }
@@ -42,6 +45,7 @@ pub struct Operation {
     pub writes: bool,
     pub network: bool,
     pub admin: bool,
+    pub execution: bool,
 }
 fn op(
     method: &'static str,
@@ -60,6 +64,7 @@ fn op(
         writes,
         network,
         admin,
+        execution: method == "mcp.probe",
     }
 }
 pub fn operations() -> Vec<Operation> {
@@ -152,6 +157,12 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op("capability.import_text", "Import caller-supplied rule or skill text as an unreviewed record; no fetching, scripts or native installation", json!({"name":string,"body":string,"capability_type":{"type":"string","enum":["rule","skill"]},"version":string,"source_ref":string,"source_revision":string,"source_license":string}), &["name","body"], true, false, false),
         op("capability.review", "Acknowledge the exact content digest and revision; grants no runtime permissions", json!({"id":string,"expected_revision":string,"expected_digest":string}), &["id","expected_revision","expected_digest"], true, false, false),
         op("capability.prepare", "Resolve selected capabilities and dependencies into adapter-specific text applications; no execution or config writes", json!({"capability_ids":{"type":"array","items":{"type":"string"},"maxItems":64},"target_agent":agent}), &["capability_ids","target_agent"], false, false, false),
+        op("mcp.inspect", "Inspect portable definition, device mapping, adaptation, connection state and interface authorization", json!({"id":string,"target_agent":agent}), &["id","target_agent"], false, false, false),
+        op("mcp.map", "Set device-local executable/argv/environment references with definition and mapping revision checks", json!({"id":string,"expected_revision":string,"expected_mapping_revision":string,"mapping":data}), &["id","expected_revision","expected_mapping_revision","mapping"], true, false, true),
+        op("mcp.clear_mapping", "Clear only the device-local MCP mapping; portable definition remains", json!({"id":string,"expected_mapping_revision":string}), &["id","expected_mapping_revision"], true, false, true),
+        op("mcp.prepare", "Generate adapter registration document data for one MCP definition; no config writes or execution", json!({"id":string,"expected_revision":string,"target_agent":agent}), &["id","target_agent"], false, false, false),
+        op("mcp.probe", "Explicit bounded stdio initialize/catalog check of the confirmed local command; never call tools", json!({"id":string,"expected_revision":string,"expected_mapping_revision":string,"probe_id":string,"confirm_execution":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":100,"maximum":5000}}), &["id","expected_revision","expected_mapping_revision","probe_id","confirm_execution"], true, false, true),
+        op("mcp.cancel", "Request cancellation of the exact currently running check; does not change persistent authorization", json!({"id":string,"probe_id":string}), &["id","probe_id"], true, false, true),
         op("task.inspect", "Read task context, allowed status transitions and handoff readiness", json!({"id":string}), &["id"], false, false, false),
         op("task.transition", "Move task to an allowed state with a recorded reason; done requires a completion summary", json!({"id":string,"expected_revision":string,"status":{"type":"string","enum":task::STATES},"reason":string}), &["id","expected_revision","status","reason"], true, false, false),
         op("task.progress", "Append a progress entry and user-recorded checks to the exact expected task revision", json!({"id":string,"expected_revision":string,"summary":string,"checks":{"type":"array","items":{"type":"string"},"maxItems":128}}), &["id","expected_revision","summary"], true, false, false),
@@ -244,6 +255,7 @@ impl Service {
                 (!o.writes || self.policy.writes)
                     && (!o.network || self.policy.sync)
                     && (!o.admin || self.policy.admin)
+                    && (!o.execution || self.policy.probes)
             })
             .collect()
     }
@@ -255,6 +267,7 @@ impl Service {
         if (operation.writes && !self.policy.writes)
             || (operation.network && !self.policy.sync)
             || (operation.admin && !self.policy.admin)
+            || (operation.execution && !self.policy.probes)
         {
             return Err(Error::new(
                 "permission_denied",
@@ -353,6 +366,41 @@ impl Service {
                     data,
                 )?)?)
             }
+            "mcp.inspect" => mcp::inspect(
+                &self.store,
+                text("id")?,
+                self.registry.get(text("target_agent")?)?,
+                self.policy.probes,
+            ),
+            "mcp.map" => mcp::map(
+                &self.store,
+                text("id")?,
+                text("expected_revision")?,
+                text("expected_mapping_revision")?,
+                params["mapping"].clone(),
+            ),
+            "mcp.clear_mapping" => {
+                mcp::clear(&self.store, text("id")?, text("expected_mapping_revision")?)
+            }
+            "mcp.prepare" => mcp::prepare(
+                &self.store,
+                text("id")?,
+                params.get("expected_revision").and_then(Value::as_str),
+                self.registry.get(text("target_agent")?)?,
+            ),
+            "mcp.probe" => mcp::check(
+                &self.store,
+                text("id")?,
+                text("expected_revision")?,
+                text("expected_mapping_revision")?,
+                text("probe_id")?,
+                params["confirm_execution"].as_bool().unwrap(),
+                params
+                    .get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(2000),
+            ),
+            "mcp.cancel" => mcp::cancel(&self.store, text("id")?, text("probe_id")?),
             "task.inspect" => task::inspect(&self.store, text("id")?),
             "task.transition" | "task.progress" | "task.decision" | "task.artifact" => {
                 task::record(
@@ -472,6 +520,34 @@ impl Service {
                 {
                     plan["warnings"].as_array_mut().unwrap().push(json!("Capability text is included in argv; MCP bindings and native skill files are not installed by this plan."));
                 }
+                let mut mcp_context = vec![];
+                if let Some(context) = &context {
+                    let ids: Vec<String> =
+                        serde_json::from_value(context["profile"]["mcp_ids"].clone())?;
+                    for id in ids {
+                        let inspection = mcp::inspect(
+                            &self.store,
+                            &id,
+                            self.registry.get(text("agent")?)?,
+                            self.policy.probes,
+                        )?;
+                        let registration = if inspection["ready"] == true {
+                            match mcp::prepare(
+                                &self.store,
+                                &id,
+                                inspection["definition"]["revision"].as_str(),
+                                self.registry.get(text("agent")?)?,
+                            ) {
+                                Ok(plan) => json!({"state":"prepared","plan":plan}),
+                                Err(e) => json!({"state":"unsupported","error":e}),
+                            }
+                        } else {
+                            json!({"state":"needs_setup","issues":inspection["issues"]})
+                        };
+                        mcp_context.push(json!({"id":id,"definition_revision":inspection["definition"]["revision"],"connection":inspection["connection"],"registration":registration,"installed":false}));
+                    }
+                }
+                plan["mcp_context"] = json!(mcp_context);
                 plan["capability_context"] = applications;
                 plan["identity_context"] = context.unwrap_or(Value::Null);
                 plan["task_context"] = packet.unwrap_or(Value::Null);
@@ -582,6 +658,10 @@ fn validate(schema: &Value, params: &Value) -> Result<()> {
             .ok_or_else(|| Error::new("invalid_params", format!("Unknown field: {key}")))?;
         let type_ok = match spec["type"].as_str() {
             Some("string") => value.is_string() && !value.as_str().unwrap().is_empty(),
+            Some("integer") => value.as_u64().is_some_and(|n| {
+                n >= spec["minimum"].as_u64().unwrap_or(0)
+                    && n <= spec["maximum"].as_u64().unwrap_or(u64::MAX)
+            }),
             Some("boolean") => value.is_boolean(),
             Some("object") => value.is_object(),
             Some("array") => value.as_array().is_some_and(|a| {

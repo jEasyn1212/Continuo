@@ -8,7 +8,7 @@ Continuo is an open-source, local-first workspace for identities, tasks, capabil
 
 ## 当前状态
 
-这是 `0.4.0` 开发原型，本轮完善能力正文、来源与版本、适用性检查及启动计划中的应用。已有 macOS arm64 开发 App 与独立 Web 入口；用户已在 Air 确认看到上一版界面。仍未发布正式安装包。
+这是 `0.5.0` 开发原型，本轮完善 MCP 定义、本机映射、适配注册与有授权的连接检查。已有 macOS arm64 开发 App 与独立 Web 入口；用户已在 Air 确认看到上一版界面。仍未发布正式安装包。
 
 | 已实现 | 范围 |
 | --- | --- |
@@ -16,6 +16,7 @@ Continuo is an open-source, local-first workspace for identities, tasks, capabil
 | 身份工作区 | 角色说明、指引、偏好 agent、能力/MCP 关联、设备当前身份、关联检查、冲突编辑合并 |
 | 任务工作区 | 目标/验收、六种状态、原因日志、进展/检查、决策/理由、产物引用、版本绑定接续材料 |
 | 能力工作区 | 规则/skill 文本、声明来源与许可、内容版本、精确摘要检查、依赖图、agent 适用性与启动计划应用 |
+| MCP 工作区 | 同步定义、本机映射、适配/连接/授权分离、需确认的 stdio 协议检查、超时/取消及注册计划 |
 | CLI | JSON 输入输出、稳定错误码、乐观并发检查 |
 | MCP stdio | 初始化、工具发现、结构化工具结果、按启动授权暴露工具 |
 | 三种 agent 适配器 | 能力声明、启动/原生恢复参数计划、MCP 注册文档数据 |
@@ -23,7 +24,7 @@ Continuo is an open-source, local-first workspace for identities, tasks, capabil
 | App / Web 共用界面 | 六领域管理、版本冲突选择、启动计划、同步配置与手动同步、共享接口控制台 |
 | 独立 Web 入口 | 普通浏览器经本机 HTTP → MCP → Rust 核心操作真实数据；默认只读 |
 
-原型目前不执行 agent 进程、不投递 Skills 或改写原生配置，不读取现有账号与会话日志。原生恢复参数需要目标运行时和本机数据支持；跨 agent 接续输出工作材料，不迁移内部状态。设备记录不等于设备授权，首版尚未实现配对、密钥恢复/轮换、细粒度权限和实时会话同步。
+原型支持用户确认后的有限 MCP 服务检查；仍不执行 agent 进程、不投递 Skills 或改写原生配置，不读取现有账号与会话日志。原生恢复参数需要目标运行时和本机数据支持；跨 agent 接续输出工作材料，不迁移内部状态。设备记录不等于设备授权，首版尚未实现配对、密钥恢复/轮换、细粒度权限和实时会话同步。
 
 ## 构建
 
@@ -157,3 +158,5 @@ docs/                      产品边界、架构、接口、同步协议与决�
 MIT，见 [LICENSE](LICENSE)。参考来源及代码借用规则见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Continuo 名称尚未完成商标或域名可用性检索。
 
 能力模块的字段、检查流程和文本导入边界见 [docs/capability.md](docs/capability.md)。
+
+MCP 模块与一次连接检查的执行授权、边界见 [docs/mcp.md](docs/mcp.md)。

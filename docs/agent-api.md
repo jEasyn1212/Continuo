@@ -58,3 +58,11 @@ MCP 使用标准 newline-delimited JSON-RPC stdio，支持协议版本 `2025-11-
 `capability.inspect {id, target_agent?}` 返回 `digest`、`capability.revision`、`issues` 与依赖快照。随后 `capability.review {id, expected_revision, expected_digest}` 确认这一版正文；此接口需入口写权限，但不授予运行权限。
 
 `capability.prepare {capability_ids, target_agent}` 返回依赖在前的适配器应用。`agent.prepare` 增加 `capability_ids` 供额外选择，并自动应用身份关联能力；输出 `capability_context` 包含 revision/digest/策略/来源与 `scripts_executed:false`、`permissions_granted:false`、`config_written:false`。缺失、冲突、循环、未检查或不适用时返回结构化 `capability_not_ready`。所有方法经共享操作目录暴露为 CLI/MCP/App/Web 接口。
+
+## MCP 定义与本机连接
+
+`mcp.inspect {id,target_agent}` 分别返回 definition、mapping、adaptation、connection、authorization 与 issues。`mcp.map {id,expected_revision,expected_mapping_revision,mapping}` 用双 revision CAS 保存本机 executable/args/cwd/env_refs；需要写与 admin 权限。`mcp.clear_mapping {id,expected_mapping_revision}` 只清除本机映射并保留版本标记。
+
+`mcp.prepare {id,target_agent,expected_revision?}` 生成选定 adapter 的注册文档数据，不写配置。`agent.prepare` 的身份绑定还会返回 `mcp_context`，缺失本机环境时明确 needs_setup；未声称安装或工具授权。
+
+`mcp.probe {id,expected_revision,expected_mapping_revision,probe_id,confirm_execution,timeout_ms?}` 为一次有界 stdio 协议检查，需独立 probes 许可、写/admin 与明确确认；默认入口不暴露。`mcp.cancel {id,probe_id}` 可在检查进行时请求取消。超时 100..5000 ms（默认 2000），不调用工具，原始服务输出不持久化。CLI/MCP 可加 --allow-mcp-probes；MCP worker 还需 --allow-writes --allow-admin。不是程序沙箱，不自动解析凭据或运行导入内容。
