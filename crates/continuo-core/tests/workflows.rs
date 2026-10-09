@@ -255,7 +255,7 @@ fn stale_writes_read_only_policy_and_credentials_are_rejected() {
             json!({"kind":"task","name":"test","data":{}}),
         )
         .unwrap();
-    let p = json!({"id":created["id"],"expected_revision":created["heads"][0]["revision"],"data":{"status":"done"}});
+    let p = json!({"id":created["id"],"expected_revision":created["heads"][0]["revision"],"name":"updated"});
     s.call("entity.update", p.clone()).unwrap();
     assert_eq!(
         s.call("entity.update", p).unwrap_err().code,

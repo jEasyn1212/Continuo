@@ -70,7 +70,7 @@ export async function connectCore({ binary, dataDir, writes, sync, admin }) {
     const info = await request("initialize", {
       protocolVersion: "2025-11-25",
       capabilities: {},
-      clientInfo: { name: "continuo-local-web", version: "0.1.1" },
+      clientInfo: { name: "continuo-local-web", version: "1" },
     });
     child.stdin.write(
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) +

@@ -77,7 +77,7 @@ fn live(store: &Store, id: &str) -> Result<Event> {
     }
     Ok(view.heads[0].clone())
 }
-fn inspect_inner(store: &Store, id: &str) -> Result<Value> {
+pub(crate) fn inspect_inner(store: &Store, id: &str) -> Result<Value> {
     let event = live(store, id)?;
     let profile = Profile::parse(&event.data)?;
     let mut bindings = vec![];

@@ -56,6 +56,9 @@ impl Event {
             }
         }
         reject_credentials(&self.data)?;
+        if self.kind == "task" {
+            crate::task::Profile::parse(&self.data)?;
+        }
         if self.kind == "identity" {
             crate::identity::Profile::parse(&self.data)?;
         }

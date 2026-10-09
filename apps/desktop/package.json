@@ -1,19 +1,20 @@
 {
   "name": "continuo-desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "tauri": "tauri",
-    "format": "prettier --write src vite.config.ts web/*.mjs demo-app.mjs sign-app.mjs index.html",
-    "format:check": "prettier --check src vite.config.ts web/*.mjs demo-app.mjs sign-app.mjs index.html",
+    "format": "prettier --write src vite.config.ts vitest.config.ts web/*.mjs demo-app.mjs sign-app.mjs index.html",
+    "format:check": "prettier --check src vite.config.ts vitest.config.ts web/*.mjs demo-app.mjs sign-app.mjs index.html",
     "web": "node web/server.mjs",
     "test:web": "node --test web/server.test.mjs",
     "app:build": "tauri build --bundles app && node sign-app.mjs",
     "demo:web": "node web/server.mjs --data-dir ../../.local-demo --allow-writes --allow-admin",
-    "demo:app": "node demo-app.mjs"
+    "demo:app": "node demo-app.mjs",
+    "test:ui": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.0",
@@ -22,10 +23,14 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "jsdom": "^27.4.0",
     "prettier": "^3.9.9",
     "typescript": "^5.9.3",
-    "vite": "^7.3.0"
+    "vite": "^7.3.0",
+    "vitest": "^4.1.11"
   }
 }

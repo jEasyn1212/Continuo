@@ -4,7 +4,7 @@ use crate::{
     model::KINDS,
     store::Store,
     sync::{self, SyncBackend},
-    Error, Result,
+    task, Error, Result,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -148,6 +148,12 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op("identity.current", "Read device-local current identity, its selection revision and availability", json!({}), &[], false, false, false),
         op("identity.activate", "Select a live identity on this device with optimistic identity and selection revisions", json!({"id":string,"expected_revision":string,"expected_selection_revision":string}), &["id","expected_revision","expected_selection_revision"], true, false, false),
         op("identity.clear", "Clear device-local current identity using its selection revision", json!({"expected_selection_revision":string}), &["expected_selection_revision"], true, false, false),
+        op("task.inspect", "Read task context, allowed status transitions and handoff readiness", json!({"id":string}), &["id"], false, false, false),
+        op("task.transition", "Move task to an allowed state with a recorded reason; done requires a completion summary", json!({"id":string,"expected_revision":string,"status":{"type":"string","enum":task::STATES},"reason":string}), &["id","expected_revision","status","reason"], true, false, false),
+        op("task.progress", "Append a progress entry and user-recorded checks to the exact expected task revision", json!({"id":string,"expected_revision":string,"summary":string,"checks":{"type":"array","items":{"type":"string"},"maxItems":128}}), &["id","expected_revision","summary"], true, false, false),
+        op("task.decision", "Append a decision with its rationale to the exact expected task revision", json!({"id":string,"expected_revision":string,"summary":string,"reason":string}), &["id","expected_revision","summary","reason"], true, false, false),
+        op("task.artifact", "Record a portable artifact reference and user verification notes; no file upload", json!({"id":string,"expected_revision":string,"title":string,"reference":string,"verification":string}), &["id","expected_revision","title","reference"], true, false, false),
+        op("task.handoff", "Build a revision-bound task packet with identity, progress, decisions, artifacts and preflight checklist", json!({"task_id":string,"target_agent":agent,"expected_revision":string}), &["task_id","target_agent"], false, false, false),
         op(
             "agent.list",
             "Describe registered agent adapters and their limits",
@@ -160,7 +166,7 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op(
             "agent.prepare",
             "Prepare argv and environment without starting an agent or editing native config",
-            json!({"agent":agent,"cwd":string,"prompt":string,"native_session_id":string,"identity_id":string,"use_current_identity":{"type":"boolean"}}),
+            json!({"agent":agent,"cwd":string,"prompt":string,"native_session_id":string,"identity_id":string,"use_current_identity":{"type":"boolean"},"task_id":string,"expected_task_revision":string}),
             &["agent", "cwd"],
             false,
             false,
@@ -178,7 +184,7 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
         op(
             "session.handoff",
             "Build explicit task context for another agent; never migrate internal state",
-            json!({"task_id":string,"target_agent":agent}),
+            json!({"task_id":string,"target_agent":agent,"expected_revision":string}),
             &["task_id", "target_agent"],
             false,
             false,
@@ -302,26 +308,78 @@ impl Service {
             "identity.clear" => {
                 identity::select(&self.store, text("expected_selection_revision")?, None)
             }
+            "task.inspect" => task::inspect(&self.store, text("id")?),
+            "task.transition" | "task.progress" | "task.decision" | "task.artifact" => {
+                task::record(
+                    &self.store,
+                    text("id")?,
+                    text("expected_revision")?,
+                    method.strip_prefix("task.").unwrap(),
+                    &params,
+                )
+            }
             "agent.list" => Ok(json!({"adapters":self.registry.list()})),
             "agent.prepare" => {
-                let context = identity::launch_context(
-                    &self.store,
-                    params.get("identity_id").and_then(Value::as_str),
-                    params
-                        .get("use_current_identity")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true),
-                )?;
+                if params.get("expected_task_revision").is_some() && params.get("task_id").is_none()
+                {
+                    return Err(Error::new(
+                        "invalid_params",
+                        "expected_task_revision requires task_id",
+                    ));
+                }
+                let packet = params
+                    .get("task_id")
+                    .and_then(Value::as_str)
+                    .map(|id| {
+                        task::handoff(
+                            &self.store,
+                            id,
+                            text("agent")?,
+                            params.get("expected_task_revision").and_then(Value::as_str),
+                        )
+                    })
+                    .transpose()?;
+                let assigned = packet
+                    .as_ref()
+                    .and_then(|p| p["context"]["snapshot"]["profile"]["identity_id"].as_str());
+                let explicit = params.get("identity_id").and_then(Value::as_str);
+                if explicit.is_some() && assigned.is_some() && explicit != assigned {
+                    return Err(Error::new("task_identity_mismatch","The selected identity differs from the task assignment; edit the assignment explicitly"));
+                }
+                let context = if assigned.is_some() {
+                    let mut c =
+                        packet.as_ref().unwrap()["context"]["snapshot"]["identity_context"].clone();
+                    c["source"] = json!("task");
+                    Some(c)
+                } else {
+                    identity::launch_context(
+                        &self.store,
+                        explicit,
+                        params
+                            .get("use_current_identity")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(true),
+                    )?
+                };
+                let prompt = match (
+                    packet.as_ref(),
+                    params.get("prompt").and_then(Value::as_str),
+                ) {
+                    (Some(p), Some(extra)) => Some(format!(
+                        "{}\n\nAdditional user instructions:\n{}",
+                        p["prompt"].as_str().unwrap(),
+                        extra
+                    )),
+                    (Some(p), None) => p["prompt"].as_str().map(str::to_owned),
+                    (None, extra) => extra.map(str::to_owned),
+                };
                 let instructions = context
                     .as_ref()
                     .and_then(|c| c["profile"]["instructions"].as_str())
                     .map(str::to_owned);
                 let request = LaunchRequest {
                     cwd: text("cwd")?.into(),
-                    prompt: params
-                        .get("prompt")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
+                    prompt,
                     native_session_id: params
                         .get("native_session_id")
                         .and_then(Value::as_str)
@@ -340,6 +398,7 @@ impl Service {
                     plan["warnings"].as_array_mut().unwrap().push(json!("Capability and MCP bindings are context records; native configuration is not installed by this plan."));
                 }
                 plan["identity_context"] = context.unwrap_or(Value::Null);
+                plan["task_context"] = packet.unwrap_or(Value::Null);
                 Ok(plan)
             }
 
@@ -407,18 +466,13 @@ impl Service {
                     .get(text("agent")?)?
                     .mcp_registration(text("executable")?, &args))
             }
-            "session.handoff" => {
+            "session.handoff" | "task.handoff" => {
                 self.registry.get(text("target_agent")?)?;
-                let view = self.store.get(text("task_id")?)?;
-                if view.kind != "task" || view.conflicted || view.heads[0].deleted {
-                    return Err(Error::new(
-                        "invalid_task",
-                        "Choose a live task without unresolved conflicts",
-                    ));
-                }
-                let task = &view.heads[0];
-                Ok(
-                    json!({"task_id":task.entity_id,"task_revision":task.revision,"target_agent":text("target_agent")?,"internal_state_transferred":false,"context":{"goal":task.name,"record":task.data},"prompt":format!("Continue this task using the recorded goals, decisions, artifacts and next steps. Verify the current environment before acting.\n\nGoal: {}\nRecord:\n{}",task.name,serde_json::to_string_pretty(&task.data)?)}),
+                task::handoff(
+                    &self.store,
+                    text("task_id")?,
+                    text("target_agent")?,
+                    params.get("expected_revision").and_then(Value::as_str),
                 )
             }
             "sync.key_generate" => {
@@ -454,9 +508,16 @@ fn validate(schema: &Value, params: &Value) -> Result<()> {
             Some("string") => value.is_string() && !value.as_str().unwrap().is_empty(),
             Some("boolean") => value.is_boolean(),
             Some("object") => value.is_object(),
-            Some("array") => value
-                .as_array()
-                .is_some_and(|a| a.len() >= 2 && a.iter().all(Value::is_string)),
+            Some("array") => value.as_array().is_some_and(|a| {
+                a.len() >= spec.get("minItems").and_then(Value::as_u64).unwrap_or(0) as usize
+                    && a.len()
+                        <= spec
+                            .get("maxItems")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(u64::MAX) as usize
+                    && a.iter()
+                        .all(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+            }),
             _ => true,
         };
         let enum_ok = spec

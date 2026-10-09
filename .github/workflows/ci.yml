@@ -32,6 +32,8 @@ jobs:
       - run: cargo build -p continuo-cli --locked
       - run: npm run test:web
         working-directory: apps/desktop
+      - run: npm run test:ui
+        working-directory: apps/desktop
   desktop-native:
     runs-on: macos-latest
     steps:

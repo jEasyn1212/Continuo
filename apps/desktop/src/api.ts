@@ -133,6 +133,18 @@ export async function call<T>(
       identity_bindings_unavailable:
         "关联的能力或 MCP 缺失、已删除或存在冲突。请检查关联并修复。",
       invalid_identity: "请选择没有冲突且仍有效的身份。",
+      invalid_task_profile:
+        "任务字段、状态或产物引用不符合要求。受阻需填写阻碍，完成需填写结论；产物使用 project:相对路径或不含凭据、查询参数的 HTTPS 地址。",
+      invalid_task_identity:
+        "关联身份缺失、已删除或存在冲突，请更换或清除任务的身份关联。",
+      task_transition_requires_reason:
+        "状态变化必须记录新的原因，请使用任务状态流转接口。",
+      invalid_task_transition:
+        "不能直接进入这个状态，请使用当前允许的状态流转。",
+      task_not_ready:
+        "接续前请填写目标、下一步，并确认任务仍开放且关联身份有效。",
+      task_identity_mismatch:
+        "所选身份与任务关联的身份不同，请明确修改任务的身份关联。",
       invalid_task: "请选择没有冲突且仍有效的任务。",
       sync_not_configured: "请先配置同步仓库和加密密钥。",
       sync_busy: "另一个同步正在进行，请稍后重试。",

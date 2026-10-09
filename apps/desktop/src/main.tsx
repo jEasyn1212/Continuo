@@ -11,6 +11,7 @@ import {
   Status,
 } from "./api";
 import "./style.css";
+import { TaskWorkspace } from "./TaskWorkspace";
 import { IdentityWorkspace, CurrentIdentity } from "./IdentityWorkspace";
 
 const domains: {
@@ -60,6 +61,7 @@ type Page = "overview" | Kind | "agents" | "sync" | "api";
 
 function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [hasUnsaved, setHasUnsaved] = useState(false);
   const [page, setPage] = useState<Page>("overview");
   const [status, setStatus] = useState<Status | null>(null);
   const [entities, setEntities] = useState<Entity[]>([]);
@@ -90,6 +92,13 @@ function App() {
   const domain = domains.find((d) => d.kind === page);
   const current = entities.find((e) => e.id === selected);
 
+  function navigate(next: Page) {
+    if (next === page) return;
+    if (hasUnsaved && !window.confirm("放弃尚未保存的工作记录并切换模块？"))
+      return;
+    setHasUnsaved(false);
+    setPage(next);
+  }
   async function refresh() {
     try {
       const nextConnection = await connect();
@@ -195,7 +204,7 @@ function App() {
           href="#"
           onClick={(e) => {
             e.preventDefault();
-            setPage("overview");
+            navigate("overview");
           }}
           aria-label="Continuo 概览"
         >
@@ -228,7 +237,7 @@ function App() {
         <nav aria-label="主导航">
           <button
             className={page === "overview" ? "active" : ""}
-            onClick={() => setPage("overview")}
+            onClick={() => navigate("overview")}
           >
             <span>◈</span>概览
           </button>
@@ -237,7 +246,7 @@ function App() {
             <button
               key={d.kind}
               className={page === d.kind ? "active" : ""}
-              onClick={() => setPage(d.kind)}
+              onClick={() => navigate(d.kind)}
             >
               <span className="nav-number">{d.mark}</span>
               {d.label}
@@ -247,19 +256,19 @@ function App() {
           <p className="nav-label">连接</p>
           <button
             className={page === "agents" ? "active" : ""}
-            onClick={() => setPage("agents")}
+            onClick={() => navigate("agents")}
           >
             <span>↗</span>Agent 适配
           </button>
           <button
             className={page === "sync" ? "active" : ""}
-            onClick={() => setPage("sync")}
+            onClick={() => navigate("sync")}
           >
             <span>⇄</span>跨设备同步
           </button>
           <button
             className={page === "api" ? "active" : ""}
-            onClick={() => setPage("api")}
+            onClick={() => navigate("api")}
           >
             <span>⌘</span>接口控制台
           </button>
@@ -345,7 +354,7 @@ function App() {
                   className="primary"
                   disabled={!connected}
                   onClick={() => {
-                    setPage("identity");
+                    navigate("identity");
                   }}
                 >
                   管理我的工作环境 <span>↗</span>
@@ -367,7 +376,7 @@ function App() {
                     className="domain-card"
                     key={d.kind}
                     onClick={() =>
-                      setPage(d.kind === "device" ? "sync" : d.kind)
+                      navigate(d.kind === "device" ? "sync" : d.kind)
                     }
                   >
                     <div>
@@ -425,9 +434,19 @@ function App() {
               adapters={adapters}
               refreshSignal={status}
               onChange={refresh}
+              onDirtyChange={setHasUnsaved}
             />
           )}
-          {domain && page !== "identity" && (
+          {page === "task" && connected && (
+            <TaskWorkspace
+              writable={writable}
+              adapters={adapters}
+              refreshSignal={status}
+              onChange={refresh}
+              onDirtyChange={setHasUnsaved}
+            />
+          )}
+          {domain && page !== "identity" && page !== "task" && (
             <>
               <div className="page-heading">
                 <div>
@@ -887,7 +906,7 @@ function App() {
           )}
         </div>
         <footer>
-          Continuo 0.2.0{" "}
+          Continuo 0.3.0{" "}
           <span>本地优先 · 用户自选存储 · App / Web / CLI / MCP 共享核心</span>
         </footer>
       </main>

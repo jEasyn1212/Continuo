@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "continuo-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "continuo-core",
  "serde_json",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "continuo-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64",
  "chacha20poly1305",

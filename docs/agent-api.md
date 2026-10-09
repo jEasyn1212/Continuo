@@ -15,6 +15,10 @@
 | identity.current | 本机当前身份、选择版本与可用状态 | 读 |
 | identity.activate | 以身份版本和选择版本切换本机当前身份 | 写 |
 | identity.clear | 以选择版本清除本机当前身份 | 写 |
+| task.inspect | 查询目标、状态、日志、身份与接续就绪检查 | 读 |
+| task.transition | 以当前版本流转状态并记录原因 | 写 |
+| task.progress / task.decision / task.artifact | 追加进展/检查、决策/理由、产物/验证说明 | 写 |
+| task.handoff | 生成绑定当前版本的任务材料与预检清单 | 读 |
 | agent.list | 查询三种适配器的能力与限制 | 读 |
 | agent.prepare | 准备启动或原生恢复的 argv | 读 |
 | agent.mcp_registration | 生成目标 agent 的 MCP 注册文档数据 | 读 |
@@ -35,11 +39,13 @@ CLI 默认允许本地记录与管理操作；网络同步仍需 `--allow-sync`�
 
 推荐 agent 流程：查询实体 → 提取 head.revision → 提交明确变更 → 遇到 revision_conflict 重新读取 → 冲突存在时呈现给用户或按用户授权合并 → 显式同步。
 
-实体 `data` 当前为 JSON 对象，更新会整体替换它，所以保留需要的已有字段。常用内容：identity.instructions；task.goal/status/decisions/next_steps/artifact_refs；capability.source/version；mcp.transport/command/credential_refs；session.agent/native_session_id/task_id/identity_id；device.environment_refs。身份字段及能力/MCP 关联已有领域校验；其他对象的关系尚未全部校验。身份字段与机器操作流程见 [身份模块](identity.md)。
+实体 `data` 当前为 JSON 对象，更新会整体替换它，所以保留需要的已有字段。常用内容：identity.instructions；task.goal/status/decisions/next_steps/artifact_refs；capability.source/version；mcp.transport/command/credential_refs；session.agent/native_session_id/task_id/identity_id；device.environment_refs。身份字段、能力/MCP 关联、任务结构、状态变化、任务身份与产物引用已有领域校验；其他对象的关系尚未全部校验。身份字段与机器操作流程见 [身份模块](identity.md)。
 
 `agent.prepare` 默认采用本机当前身份；显式 `identity_id` 优先，`use_current_identity:false` 可在没有显式身份时跳过本机选择。失效的当前身份会报错，不会隐式使用空身份。返回 `identity_context`，包含身份及关联记录的版本快照，能力和 MCP 尚未投递到原生配置。
 
-已知错误：`invalid_identity_profile`、`identity_bindings_unavailable`、`selection_conflict`、`invalid_params`、`not_found`、`revision_conflict`、`permission_denied`、`unsupported_agent`、`credential_not_allowed`、`sync_not_configured`、`sync_busy`、`incompatible_workspace`、`decryption_failed`、`sync_push_failed`。同步失败保留本地事件，重试先重新取远端版本。
+任务接口详情见 [任务模块](task.md)。`agent.prepare` 可传 `task_id` 与 `expected_task_revision`；使用任务接续材料作为指令，优先采用任务关联的身份。显式身份与任务关联不一致时拒绝计划，调用者应先明确修改任务。`session.handoff` 是 `task.handoff` 的兼容方法名，0.3.0 起也要求目标、下一步与开放任务状态。
+
+已知错误：`invalid_task_profile`、`invalid_task_transition`、`task_transition_requires_reason`、`task_not_ready`、`task_identity_mismatch`、`invalid_identity_profile`、`identity_bindings_unavailable`、`selection_conflict`、`invalid_params`、`not_found`、`revision_conflict`、`permission_denied`、`unsupported_agent`、`credential_not_allowed`、`sync_not_configured`、`sync_busy`、`incompatible_workspace`、`decryption_failed`、`sync_push_failed`。同步失败保留本地事件，重试先重新取远端版本。
 
 MCP 使用标准 newline-delimited JSON-RPC stdio，支持协议版本 `2025-11-25`、`2025-06-18`、`2025-03-26`。必须先 initialize，再 notifications/initialized。stdout 仅包含协议消息。应用错误返回 `isError: true`，同时提供文本与 `structuredContent`；协议错误采用 JSON-RPC error。每条输入最大 1 MiB。
 

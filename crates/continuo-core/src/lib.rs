@@ -5,6 +5,7 @@ pub mod identity;
 pub mod model;
 pub mod store;
 pub mod sync;
+pub mod task;
 
 use serde::Serialize;
 use serde_json::Value;

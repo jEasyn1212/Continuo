@@ -71,7 +71,10 @@ test("Web uses real core records, CLI shares data, and optimistic writes remain 
     await f.call("entity.create", {
       kind: "task",
       name: "Web actual record",
-      data: { next_steps: ["Continue via CLI"] },
+      data: {
+        goal: "Verify real Web records",
+        next_steps: ["Continue via CLI"],
+      },
     })
   ).body;
   assert.equal(created.ok, true);
@@ -218,7 +221,7 @@ test("production HTML and its compiled assets are served independently of Tauri"
   const bootstrap = await fetch(`${server.url}/api/bootstrap`, {
     headers: { "X-Continuo-Client": "web-v1" },
   });
-  assert.equal((await bootstrap.json()).data.server.version, "0.2.0");
+  assert.equal((await bootstrap.json()).data.server.version, "0.3.0");
 });
 
 test("Identity operations cross Web/MCP/CLI with local selection, real bindings and fail-closed preparation", async (t) => {
@@ -290,4 +293,114 @@ test("Identity operations cross Web/MCP/CLI with local selection, real bindings 
     })
   ).body;
   assert.equal(neutral.data.identity_context, null);
+});
+
+test("Task workflow persists progress, decisions and artifacts through MCP; handoff and plans bind revisions", async (t) => {
+  const f = await fixture(t, { writes: true });
+  let task = (
+    await f.call("entity.create", {
+      kind: "task",
+      name: "Release review",
+      data: { goal: "Inspect a release", next_steps: ["Check source"] },
+    })
+  ).body.data;
+  for (const [method, extra] of [
+    ["task.transition", { status: "active", reason: "Begin review" }],
+    [
+      "task.progress",
+      { summary: "Read changes", checks: ["Typecheck passed"] },
+    ],
+    [
+      "task.decision",
+      {
+        summary: "Keep immutable history",
+        reason: "Concurrent changes remain reviewable",
+      },
+    ],
+    [
+      "task.artifact",
+      {
+        title: "Review",
+        reference: "project:docs/review.md",
+        verification: "Review recorded",
+      },
+    ],
+  ]) {
+    const result = (
+      await f.call(method, {
+        id: task.id,
+        expected_revision: task.heads[0].revision,
+        ...extra,
+      })
+    ).body;
+    assert.equal(result.ok, true, JSON.stringify(result));
+    task = result.data;
+  }
+  const packet = (
+    await f.call("task.handoff", {
+      task_id: task.id,
+      target_agent: "codex",
+      expected_revision: task.heads[0].revision,
+    })
+  ).body;
+  assert.equal(packet.ok, true);
+  assert.equal(packet.data.internal_state_transferred, false);
+  assert.equal(
+    packet.data.context.snapshot.profile.artifacts[0].reference,
+    "project:docs/review.md",
+  );
+  const cli = spawnSync(
+    binary,
+    ["--data-dir", f.dataDir, "call", "task.inspect", "--input", "-"],
+    { encoding: "utf8", input: JSON.stringify({ id: task.id }) },
+  );
+  assert.equal(cli.status, 0);
+  assert.equal(
+    JSON.parse(cli.stdout).data.profile.decision_log[0].summary,
+    "Keep immutable history",
+  );
+  const stale = task.heads[0].revision;
+  task = (
+    await f.call("task.progress", {
+      id: task.id,
+      expected_revision: stale,
+      summary: "Another entrance updated",
+    })
+  ).body.data;
+  assert.equal(
+    (
+      await f.call("agent.prepare", {
+        agent: "codex",
+        cwd: "/tmp",
+        task_id: task.id,
+        expected_task_revision: stale,
+      })
+    ).body.error.code,
+    "revision_conflict",
+  );
+  const plan = (
+    await f.call("agent.prepare", {
+      agent: "codex",
+      cwd: "/tmp",
+      task_id: task.id,
+      expected_task_revision: task.heads[0].revision,
+    })
+  ).body;
+  assert.equal(plan.ok, true);
+  assert.equal(plan.data.task_context.task_revision, task.heads[0].revision);
+  assert.equal(plan.data.executed, false);
+  const done = (
+    await f.call("task.transition", {
+      id: task.id,
+      expected_revision: task.heads[0].revision,
+      status: "done",
+      reason: "All checks reviewed",
+    })
+  ).body;
+  assert.equal(done.ok, true);
+  assert.equal(
+    (await f.call("task.handoff", { task_id: task.id, target_agent: "codex" }))
+      .body.error.code,
+    "task_not_ready",
+  );
 });

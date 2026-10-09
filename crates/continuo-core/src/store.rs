@@ -114,15 +114,37 @@ impl Store {
             .collect())
     }
     pub fn get(&self, id: &str) -> Result<EntityView> {
-        self.list(None, true)?
-            .into_iter()
-            .find(|e| e.id == id)
-            .ok_or_else(|| Error::new("not_found", "Entity does not exist"))
+        let mut stmt = self
+            .conn
+            .prepare("SELECT payload FROM events WHERE entity_id=?1 ORDER BY revision")?;
+        let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+        let events: Vec<Event> = rows
+            .map(|r| Ok(serde_json::from_str(&r?)?))
+            .collect::<Result<_>>()?;
+        let parents: BTreeSet<&str> = events
+            .iter()
+            .flat_map(|e| e.parents.iter().map(String::as_str))
+            .collect();
+        let heads: Vec<Event> = events
+            .iter()
+            .filter(|e| !parents.contains(e.revision.as_str()))
+            .cloned()
+            .collect();
+        if heads.is_empty() {
+            return Err(Error::new("not_found", "Entity does not exist"));
+        }
+        Ok(EntityView {
+            id: id.into(),
+            kind: heads[0].kind.clone(),
+            conflicted: heads.len() > 1,
+            heads,
+        })
     }
     pub fn create(&self, kind: &str, name: &str, data: Value) -> Result<EntityView> {
         let event = self.new_event(Uuid::new_v4().to_string(), kind, name, data, false, vec![])?;
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         crate::identity::validate_local(self, &event)?;
+        crate::task::validate_local(self, &event)?;
         self.insert(&event)?;
         tx.commit()?;
         self.get(&event.entity_id)
@@ -154,6 +176,7 @@ impl Store {
             vec![expected.into()],
         )?;
         crate::identity::validate_local(self, &event)?;
+        crate::task::validate_local(self, &event)?;
         self.insert(&event)?;
         tx.commit()?;
         self.get(id)
@@ -188,6 +211,7 @@ impl Store {
             expected.to_vec(),
         )?;
         crate::identity::validate_local(self, &event)?;
+        crate::task::validate_local(self, &event)?;
         self.insert(&event)?;
         tx.commit()?;
         self.get(id)

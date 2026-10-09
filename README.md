@@ -8,12 +8,13 @@ Continuo is an open-source, local-first workspace for identities, tasks, capabil
 
 ## 当前状态
 
-这是 `0.2.0` 开发原型，本轮完善身份模块。已有 macOS arm64 开发 App 与独立 Web 入口；用户已在 Air 确认看到上一版界面。仍未发布正式安装包。
+这是 `0.3.0` 开发原型，本轮完善任务模块。已有 macOS arm64 开发 App 与独立 Web 入口；用户已在 Air 确认看到上一版界面。仍未发布正式安装包。
 
 | 已实现 | 范围 |
 | --- | --- |
 | 六类对象 | 身份、任务、能力、MCP 定义、会话、设备的本地登记与版本管理 |
 | 身份工作区 | 角色说明、指引、偏好 agent、能力/MCP 关联、设备当前身份、关联检查、冲突编辑合并 |
+| 任务工作区 | 目标/验收、六种状态、原因日志、进展/检查、决策/理由、产物引用、版本绑定接续材料 |
 | CLI | JSON 输入输出、稳定错误码、乐观并发检查 |
 | MCP stdio | 初始化、工具发现、结构化工具结果、按启动授权暴露工具 |
 | 三种 agent 适配器 | 能力声明、启动/原生恢复参数计划、MCP 注册文档数据 |
@@ -35,6 +36,8 @@ cargo build -p continuo-cli
 cd apps/desktop
 npm ci
 npm run build
+npm run test:web
+npm run test:ui
 npm run tauri dev
 # macOS 本地构建真正的 .app
 npm run app:build
@@ -69,7 +72,7 @@ npm run demo:app
 
 二者都使用根目录下被 Git 忽略的 `.local-demo`，默认空白。演示创建的是真实本地记录，不自动导入配置或生成示例数据。Air 的构建、打开及演示步骤见 [双入口演示](docs/demo.md)。
 
-身份的内容与使用流程见 [身份模块](docs/identity.md)。当前身份是设备本地选择，不会同步切换其他设备；三个 agent 的启动计划默认采用它。
+身份的内容与使用流程见 [身份模块](docs/identity.md)，任务的状态、记录与接续见 [任务模块](docs/task.md)。当前身份是设备本地选择，不会同步切换其他设备；三个 agent 的启动计划默认采用它。
 
 ## 从 CLI 开始
 

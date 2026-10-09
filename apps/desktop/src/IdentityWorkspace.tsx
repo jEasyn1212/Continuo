@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Adapter, call, Entity, Event } from "./api";
+import { useUnsavedChanges } from "./useUnsavedChanges";
 
 export interface CurrentIdentity {
   selection: { revision: string; identity_id: string | null };
@@ -44,11 +45,13 @@ export function IdentityWorkspace({
   adapters,
   refreshSignal,
   onChange,
+  onDirtyChange,
 }: {
   writable: boolean;
   adapters: Adapter[];
   refreshSignal: unknown;
   onChange: () => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [records, setRecords] = useState<Entity[]>([]);
   const [selection, setSelection] = useState<CurrentIdentity | null>(null);
@@ -60,6 +63,7 @@ export function IdentityWorkspace({
   const [error, setError] = useState("");
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  useUnsavedChanges(dirty, onDirtyChange);
   const identities = records.filter(
     (e) => e.kind === "identity" && !e.heads.every((h) => h.deleted),
   );
