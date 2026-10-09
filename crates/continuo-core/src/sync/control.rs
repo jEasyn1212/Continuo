@@ -14,7 +14,14 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
-pub(super) fn lease(store: &Store) -> Result<File> {
+pub(super) struct SyncLease(File);
+impl Drop for SyncLease {
+    fn drop(&mut self) {
+        // Closing alone can leave flock held by a descriptor inherited during another thread's fork.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+pub(super) fn lease(store: &Store) -> Result<SyncLease> {
     let path = store.data_dir.join("sync.lock");
     let f = OpenOptions::new()
         .create(true)
@@ -23,9 +30,19 @@ pub(super) fn lease(store: &Store) -> Result<File> {
         .truncate(false)
         .open(&path)?;
     private_permissions(&path, false)?;
-    f.try_lock_exclusive()
-        .map_err(|_| Error::new("sync_busy", "Another synchronization is running"))?;
-    Ok(f)
+    loop {
+        match f.try_lock_exclusive() {
+            Ok(()) => return Ok(SyncLease(f)),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                return Err(Error::new(
+                    "sync_busy",
+                    "Another synchronization is running",
+                ))
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 fn now() -> u64 {
     SystemTime::now()
@@ -90,7 +107,7 @@ pub(super) struct Control<'a> {
     pub store: &'a Store,
     pub id: String,
     deadline: Instant,
-    _lease: File,
+    _lease: SyncLease,
 }
 impl<'a> Control<'a> {
     pub fn begin(store: &'a Store, id: Option<&str>, preview: bool, timeout: u64) -> Result<Self> {
@@ -309,5 +326,21 @@ impl Drop for Process {
         }
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn lease_release_is_not_delayed_by_an_inherited_file_description() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Store::open(t.path()).unwrap();
+        let held = lease(&store).unwrap();
+        let inherited = held.0.try_clone().unwrap();
+        assert!(lease(&store).is_err());
+        drop(held);
+        assert!(lease(&store).is_ok(), "completed owner's lease must release even while a fork-like descriptor copy still exists");
+        drop(inherited);
     }
 }
