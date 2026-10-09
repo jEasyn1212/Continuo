@@ -71,7 +71,7 @@ MCP 使用标准 newline-delimited JSON-RPC stdio，支持协议版本 `2025-11-
 
 `mcp.prepare {id,target_agent,expected_revision?}` 生成选定 adapter 的注册文档数据，不写配置。`agent.prepare` 的身份绑定还会返回 `mcp_context`，缺失本机环境时明确 needs_setup；未声称安装或工具授权。
 
-`mcp.probe {id,expected_revision,expected_mapping_revision,probe_id,confirm_execution,timeout_ms?}` 为一次有界 stdio 协议检查，需独立 probes 许可、写/admin 与明确确认；默认入口不暴露。`mcp.cancel {id,probe_id}` 可在检查进行时请求取消。超时 100..5000 ms（默认 2000），不调用工具，原始服务输出不持久化。CLI/MCP 可加 --allow-mcp-probes；MCP worker 还需 --allow-writes --allow-admin。不是程序沙箱，不自动解析凭据或运行导入内容。
+`mcp.probe {id,expected_revision,expected_mapping_revision,probe_id,confirm_execution,timeout_ms?}` 为一次有界 stdio 协议检查，需独立 probes 许可、写/admin 与明确确认；CLI/MCP/Web 默认不暴露检查能力，App 展示确认入口，仅为确认的请求授予 probes 许可。`mcp.cancel {id,probe_id}` 可在检查进行时请求取消。超时 100..5000 ms（默认 2000），不调用工具，原始服务输出不持久化。CLI/MCP 可加 --allow-mcp-probes；MCP worker 还需 --allow-writes --allow-admin。不是程序沙箱，不自动解析凭据或运行导入内容。
 
 ## 会话引用与本机恢复
 

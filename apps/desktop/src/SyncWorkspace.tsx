@@ -168,7 +168,7 @@ export function SyncWorkspace({
       !window.confirm(
         "同步到你配置的存储：\n" +
           state.config?.remote +
-          "\n\n将上传本工作区的可携带版本记录；本机路径、设备映射、登录秘密和密钥不上传。取消后发布仍可能已经完成，重试会重新读取并去重。",
+          "\n\n将上传本工作区的可携带版本记录；程序不自动读取账号、个人配置或密钥文件，本机映射不上传。自由正文和扩展字段不能自动排除秘密，请先核对。取消后发布仍可能已经完成，重试会重新读取并去重。",
       )
     )
       return;
@@ -301,6 +301,7 @@ export function SyncWorkspace({
               用户存储地址
               <input
                 value={config.remote}
+                disabled={busy || active || !writable || !admin}
                 placeholder="https://github.com/you/continuo-data.git"
                 onChange={(e) => {
                   setConfig({ ...config, remote: e.target.value });
@@ -312,6 +313,7 @@ export function SyncWorkspace({
               本机工作区密钥文件
               <input
                 value={config.key_file}
+                disabled={busy || active || !writable || !admin}
                 placeholder="已有密钥文件的绝对路径"
                 onChange={(e) => {
                   setConfig({ ...config, key_file: e.target.value });
@@ -365,7 +367,9 @@ export function SyncWorkspace({
               >
                 为新工作区生成密钥
               </button>
-              <button onClick={() => discard()}>取消配置编辑</button>
+              <button disabled={busy || active} onClick={() => discard()}>
+                取消配置编辑
+              </button>
             </div>
           </>
         )}
@@ -492,7 +496,7 @@ export function SyncWorkspace({
               整理后的名称
               <input
                 value={mergeName}
-                disabled={!writable}
+                disabled={!writable || busy || active}
                 onChange={(e) => {
                   setMergeName(e.target.value);
                   setDirty(true);
@@ -503,7 +507,7 @@ export function SyncWorkspace({
               整理后的记录内容
               <textarea
                 value={mergeData}
-                disabled={!writable}
+                disabled={!writable || busy || active}
                 onChange={(e) => {
                   setMergeData(e.target.value);
                   setDirty(true);
@@ -514,7 +518,7 @@ export function SyncWorkspace({
               <input
                 type="checkbox"
                 checked={mergeDeleted}
-                disabled={!writable}
+                disabled={!writable || busy || active}
                 onChange={(e) => {
                   setMergeDeleted(e.target.checked);
                   setDirty(true);
@@ -541,7 +545,9 @@ export function SyncWorkspace({
               >
                 保存冲突整理
               </button>
-              <button onClick={() => discard()}>取消冲突整理</button>
+              <button disabled={busy || active} onClick={() => discard()}>
+                取消冲突整理
+              </button>
             </div>
           </>
         )}
@@ -578,6 +584,7 @@ export function SyncWorkspace({
               <input
                 list="restore-versions"
                 value={source}
+                disabled={busy}
                 onChange={(e) => {
                   setSource(e.target.value);
                   setSourceEvent(null);
@@ -616,7 +623,9 @@ export function SyncWorkspace({
                   active ||
                   !restoring ||
                   !sourceEvent ||
-                  sourceEvent.deleted
+                  sourceEvent.deleted ||
+                  sourceEvent.entity_id !== restoreId ||
+                  sourceEvent.revision !== source
                 }
                 onClick={() =>
                   void action(async () => {
@@ -635,6 +644,7 @@ export function SyncWorkspace({
                 恢复所选版本
               </button>
               <button
+                disabled={busy}
                 onClick={() => {
                   setRestoreId("");
                   setHistory(null);
@@ -644,11 +654,12 @@ export function SyncWorkspace({
                 取消恢复
               </button>
             </div>
-            {sourceEvent && (
-              <pre aria-label="恢复版本预览">
-                {JSON.stringify(sourceEvent, null, 2)}
-              </pre>
-            )}
+            {sourceEvent?.entity_id === restoreId &&
+              sourceEvent.revision === source && (
+                <pre aria-label="恢复版本预览">
+                  {JSON.stringify(sourceEvent, null, 2)}
+                </pre>
+              )}
           </>
         )}
       </section>

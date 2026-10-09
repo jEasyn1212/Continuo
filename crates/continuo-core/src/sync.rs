@@ -160,6 +160,12 @@ impl GitBackend {
             ));
         }
         let workspace = workspace_id(&self.config.remote, &crypto::key_id(&key));
+        // Older clients may have stored now-forbidden portable fields. Preserve
+        // their history locally, but fail preflight before remote exchange.
+        for event in store.events()? {
+            c.check()?;
+            event.validate()?;
+        }
         c.phase("contacting")?;
         let scratch = tempfile::tempdir_in(&store.data_dir)?;
         let repo = scratch.path();
@@ -253,7 +259,7 @@ impl GitBackend {
             .count();
         if preview {
             return Ok(
-                json!({"run_id":c.id,"preview_only":true,"downloaded":0,"uploaded":0,"pending_upload":pending,"pending_download":downloaded,"conflicts":store.list(None,false)?.iter().filter(|e|e.conflicted).count(),"published":false,"remote_tip":remote_tip}),
+                json!({"run_id":c.id,"preview_only":true,"downloaded":0,"uploaded":0,"pending_upload":pending,"pending_download":downloaded,"conflicts":store.list(None,true)?.iter().filter(|e|e.conflicted).count(),"published":false,"remote_tip":remote_tip}),
             );
         }
         c.phase("importing")?;
@@ -319,7 +325,7 @@ impl GitBackend {
         };
         save_checkpoint(store, &workspace, &acknowledged, tip)?;
         let conflicts = store
-            .list(None, false)?
+            .list(None, true)?
             .iter()
             .filter(|e| e.conflicted)
             .count();

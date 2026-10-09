@@ -461,10 +461,18 @@ impl Store {
         Ok(added.len())
     }
     pub fn status(&self) -> Result<Value> {
-        let entities = self.list(None, false)?;
+        let entities = self.list(None, true)?;
         let counts: BTreeMap<&str, usize> = KINDS
             .iter()
-            .map(|k| (*k, entities.iter().filter(|e| e.kind == *k).count()))
+            .map(|k| {
+                (
+                    *k,
+                    entities
+                        .iter()
+                        .filter(|e| e.kind == *k && !e.heads.iter().all(|h| h.deleted))
+                        .count(),
+                )
+            })
             .collect();
         Ok(
             json!({"device_id":self.device_id()?,"counts":counts,"conflicts":entities.iter().filter(|e|e.conflicted).count(),"event_count":self.events()?.len(),"sync_configured":self.metadata("sync_config")?.is_some(),"last_sync":self.metadata("last_sync")?}),

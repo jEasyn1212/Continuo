@@ -74,22 +74,90 @@ impl Event {
         if self.kind == "session" {
             crate::session::Profile::parse(&self.data)?;
         }
+        reject_nonportable(&self.data)?;
         Ok(())
     }
+}
+
+// Reserve known device/runtime fields at every depth, including extensions.
+// This is a structural guard, not free-text secret/path detection or a migration.
+fn reject_nonportable(value: &Value) -> Result<()> {
+    match value {
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                let normalized: String = key
+                    .to_ascii_lowercase()
+                    .chars()
+                    .filter(|c| !matches!(c, '_' | '-'))
+                    .collect();
+                if [
+                    "cwd",
+                    "workingdirectory",
+                    "localpath",
+                    "localpaths",
+                    "executable",
+                    "env",
+                    "envrefs",
+                    "account",
+                    "accountid",
+                    "accountref",
+                    "mapping",
+                    "runtimestate",
+                    "runtimeversion",
+                    "statepresentconfirmed",
+                    "messages",
+                    "conversation",
+                    "transcript",
+                    "stdout",
+                    "stderr",
+                    "pid",
+                    "workerpid",
+                    "supervisorpid",
+                    "home",
+                    "homedir",
+                    "configpath",
+                    "databasepath",
+                    "sqlite",
+                    "sqlitepath",
+                    "credentialfile",
+                    "credentialfiles",
+                    "authjson",
+                    "environmentroots",
+                    "proberesult",
+                    "connection",
+                ]
+                .contains(&normalized.as_str())
+                {
+                    return Err(Error::new("nonportable_data", "Keep known local paths, accounts, configuration and runtime state outside portable records"));
+                }
+                reject_nonportable(value)?;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                reject_nonportable(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn reject_credentials(value: &Value) -> Result<()> {
     match value {
         Value::Object(obj) => {
             for (key, value) in obj {
-                let normalized = key.to_ascii_lowercase().replace('-', "_");
+                let normalized: String = key
+                    .to_ascii_lowercase()
+                    .chars()
+                    .filter(|c| !matches!(c, '_' | '-'))
+                    .collect();
                 if [
                     "password",
-                    "api_key",
                     "apikey",
-                    "access_token",
-                    "refresh_token",
-                    "private_key",
+                    "accesstoken",
+                    "refreshtoken",
+                    "privatekey",
                     "secret",
                     "token",
                     "authorization",

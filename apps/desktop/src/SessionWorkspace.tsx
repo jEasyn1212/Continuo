@@ -177,14 +177,16 @@ export function SessionWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selected, revisionKey, contextKey]);
-  async function action(fn: () => Promise<void>) {
+  }, [selected, revisionKey, contextKey, refreshSignal]);
+  async function action(fn: () => Promise<void>, mutates = true) {
     setBusy(true);
     setError("");
     try {
       await fn();
-      await load();
-      await onChange();
+      if (mutates) {
+        await load();
+        await onChange();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -766,7 +768,7 @@ export function SessionWorkspace({
               </button>
               <button
                 disabled={busy || !ready || !inspection.resume.ready}
-                onClick={() => void action(() => contextPlan(true))}
+                onClick={() => void action(() => contextPlan(true), false)}
               >
                 生成原生恢复计划
               </button>
@@ -809,6 +811,7 @@ export function SessionWorkspace({
                 接续目标 agent
                 <select
                   value={target}
+                  disabled={busy}
                   onChange={(e) => {
                     setTarget(e.target.value);
                     setPacket(null);
@@ -826,6 +829,7 @@ export function SessionWorkspace({
                 接续设备工作目录
                 <input
                   value={cwd}
+                  disabled={busy}
                   onChange={(e) => {
                     setCwd(e.target.value);
                     setPlan(null);
@@ -837,7 +841,7 @@ export function SessionWorkspace({
             <div className="form-actions">
               <button
                 disabled={busy || !ready || !inspection.continuation.ready}
-                onClick={() => void action(() => contextPlan())}
+                onClick={() => void action(() => contextPlan(), false)}
               >
                 生成会话接续材料
               </button>
@@ -845,7 +849,9 @@ export function SessionWorkspace({
                 disabled={
                   busy || !ready || !inspection.continuation.ready || !cwd
                 }
-                onClick={() => void action(() => contextPlan(false, true))}
+                onClick={() =>
+                  void action(() => contextPlan(false, true), false)
+                }
               >
                 生成新会话接续计划
               </button>

@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { IdentityWorkspace } from "./IdentityWorkspace";
+import { App } from "./main";
 const { startWebServer } = createRequire(path.resolve("package.json"))(
   "./web/server.mjs",
 ) as {
@@ -30,6 +32,35 @@ const { startWebServer } = createRequire(path.resolve("package.json"))(
 };
 const binary = path.resolve("../../target/debug/continuo");
 const realFetch = globalThis.fetch;
+function holdResponse(
+  method: string,
+  matches: (params: any) => boolean = () => true,
+) {
+  let held = false,
+    release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.stubGlobal("fetch", (async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => {
+    const request =
+      typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    const response = await realFetch(
+      typeof input === "string" && input.startsWith("/")
+        ? new URL(input, service.url)
+        : input,
+      init,
+    );
+    if (!held && request?.method === method && matches(request.params)) {
+      held = true;
+      await gate;
+    }
+    return response;
+  }) as typeof fetch);
+  return { release, isHeld: () => held };
+}
 let directory: string,
   dataDir: string,
   service: { url: string; close: () => Promise<void> },
@@ -141,6 +172,8 @@ test("Task forms operate the real Web/MCP core through create, status, progress,
   await click("生成使用此任务的启动计划");
   const plan = await screen.findByLabelText("任务启动计划");
   expect(plan.textContent).toContain('"executed": false');
+  await fill("目标设备工作目录", directory);
+  expect(screen.queryByLabelText("任务启动计划")).toBeNull();
   const persisted = await call<{ entities: Entity[] }>("entity.list", {
     kind: "task",
   });
@@ -1041,4 +1074,309 @@ test("Managed Web UI exposes closed execution and service rejects direct escalat
   await expect(
     call("process.start", { confirm_simulation: true }),
   ).rejects.toThrow("当前入口未获授权");
+});
+
+test("Audit: refresh invalidates task material when its linked identity is deleted", async () => {
+  const identity = await call<Entity>("entity.create", {
+    kind: "identity",
+    name: "Linked identity",
+    data: { instructions: "Reviewed context" },
+  });
+  const task = await call<Entity>("entity.create", {
+    kind: "task",
+    name: "Dependent task",
+    data: { identity_id: identity.id, goal: "Continue", next_steps: ["Check"] },
+  });
+  const props = { writable: true, adapters, onChange: async () => {} };
+  const view = render(<TaskWorkspace {...props} refreshSignal={0} />);
+  await click(/Dependent task/);
+  await click("接续");
+  await click("生成接续材料");
+  await screen.findByLabelText("接续指令");
+  await call("entity.delete", {
+    id: identity.id,
+    expected_revision: identity.heads[0].revision,
+  });
+  view.rerender(<TaskWorkspace {...props} refreshSignal={1} />);
+  await waitFor(() => expect(screen.queryByLabelText("接续指令")).toBeNull());
+  expect(
+    (await call<Entity>("entity.get", { id: task.id })).heads[0].revision,
+  ).toBe(task.heads[0].revision);
+});
+
+test("Audit: late page responses cannot replace device records and device drafts require explicit discard", async () => {
+  await call("entity.create", {
+    kind: "task",
+    name: "Unrelated task",
+    data: { goal: "Keep task separate" },
+  });
+  const d = await call<Entity>("entity.create", {
+    kind: "device",
+    name: "Fixture device",
+    data: { description: "Own metadata" },
+  });
+  render(<App />);
+  await screen.findByText("Web · 已连接本机核心");
+  const delayed = holdResponse("entity.list", (p) => !p.kind);
+  fireEvent.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: /Agent 适配/,
+    }),
+  );
+  await waitFor(() => expect(delayed.isHeld()).toBe(true));
+  fireEvent.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: /^06.*设备/,
+    }),
+  );
+  await screen.findByRole("button", { name: /Fixture device/ });
+  delayed.release();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(screen.queryByRole("button", { name: /Unrelated task/ })).toBeNull();
+  await click(/Fixture device/);
+  await click("编辑");
+  await fill("说明与工作记录", "Unsaved device note");
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  fireEvent.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: /任务/,
+    }),
+  );
+  expect(confirm).toHaveBeenCalled();
+  expect(
+    (screen.getByLabelText("说明与工作记录") as HTMLTextAreaElement).value,
+  ).toBe("Unsaved device note");
+  fireEvent.click(screen.getByRole("button", { name: "＋ 新建设备" }));
+  expect(
+    (screen.getByLabelText("说明与工作记录") as HTMLTextAreaElement).value,
+  ).toBe("Unsaved device note");
+  expect(
+    (await call<Entity>("entity.get", { id: d.id })).heads[0].data.description,
+  ).toBe("Own metadata");
+  await call("entity.update", {
+    id: d.id,
+    expected_revision: d.heads[0].revision,
+    data: { description: "Updated by another interface" },
+  });
+  await click("刷新状态 ↻");
+  await click("保存到本机");
+  await screen.findByRole("alert");
+  expect(
+    (screen.getByLabelText("说明与工作记录") as HTMLTextAreaElement).value,
+  ).toBe("Unsaved device note");
+  expect(
+    (await call<Entity>("entity.get", { id: d.id })).heads[0].data.description,
+  ).toBe("Updated by another interface");
+});
+test("Audit: App keeps fresh capability plans but removes them on an external refresh", async () => {
+  const cap = await call<Entity>("entity.create", {
+    kind: "capability",
+    name: "App capability",
+    data: { body: "Review this work" },
+  });
+  const inspection = await call<any>("capability.inspect", { id: cap.id });
+  await call("capability.review", {
+    id: cap.id,
+    expected_revision: cap.heads[0].revision,
+    expected_digest: inspection.digest,
+  });
+  render(<App />);
+  await screen.findByText("Web · 已连接本机核心");
+  fireEvent.click(
+    within(screen.getByRole("navigation")).getByRole("button", {
+      name: /^03.*能力/,
+    }),
+  );
+  await click(/App capability/);
+  await screen.findByText("当前正文与依赖已检查，可加入启动计划。");
+  await fill("本机工作目录", "/tmp");
+  const held = holdResponse("agent.prepare");
+  await click("生成能力启动计划");
+  await waitFor(() => expect(held.isHeld()).toBe(true));
+  expect(screen.getByLabelText("本机工作目录").matches(":disabled")).toBe(true);
+  held.release();
+  await screen.findByText(/"capability_context":/);
+  await click("刷新状态 ↻");
+  await waitFor(() =>
+    expect(screen.queryByText(/"capability_context":/)).toBeNull(),
+  );
+});
+
+test("Audit: sync saves freeze submitted drafts and historical previews bind the exact source", async () => {
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await syncUi();
+  const key = path.join(directory, "temporary-key"),
+    remote = path.join(directory, "isolated-storage.git");
+  fixtureGit(["init", "--bare", "--quiet", remote]);
+  await call("sync.key_generate", { path: key });
+  await click("配置同步存储");
+  await fill("用户存储地址", remote);
+  await fill("本机工作区密钥文件", key);
+  const save = holdResponse("sync.configure");
+  await click("保存同步配置");
+  await waitFor(() => expect(save.isHeld()).toBe(true));
+  expect(screen.getByLabelText("用户存储地址").matches(":disabled")).toBe(true);
+  expect(
+    screen.getByRole("button", { name: "取消配置编辑" }).matches(":disabled"),
+  ).toBe(true);
+  save.release();
+  await waitFor(() =>
+    expect(screen.queryByLabelText("用户存储地址")).toBeNull(),
+  );
+  const e = await call<Entity>("entity.create", {
+    kind: "task",
+    name: "Restore exact version",
+    data: { goal: "Original" },
+  });
+  const next = await call<Entity>("entity.update", {
+    id: e.id,
+    expected_revision: e.heads[0].revision,
+    data: { goal: "Later" },
+  });
+  await call("entity.delete", {
+    id: e.id,
+    expected_revision: next.heads[0].revision,
+  });
+  await click("刷新同步状态");
+  await fill("已删除的记录", e.id);
+  await fill("要恢复的历史 revision", e.heads[0].revision);
+  const preview = holdResponse("entity.history_version");
+  await click("查看历史版本");
+  await waitFor(() => expect(preview.isHeld()).toBe(true));
+  expect(
+    screen.getByLabelText("要恢复的历史 revision").matches(":disabled"),
+  ).toBe(true);
+  expect(
+    screen.getByRole("button", { name: "取消恢复" }).matches(":disabled"),
+  ).toBe(true);
+  preview.release();
+  await screen.findByLabelText("恢复版本预览");
+  await fill("要恢复的历史 revision", next.heads[0].revision);
+  expect(screen.queryByLabelText("恢复版本预览")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "恢复所选版本" }).matches(":disabled"),
+  ).toBe(true);
+  await click("查看历史版本");
+  await screen.findByLabelText("恢复版本预览");
+  await click("恢复所选版本");
+  await waitFor(async () =>
+    expect(
+      (await call<Entity>("entity.get", { id: e.id })).heads[0].data.goal,
+    ).toBe("Later"),
+  );
+});
+
+test("Audit: refresh invalidates capability readiness and plans when a dependency changes", async () => {
+  const dependency = await call<Entity>("entity.create", {
+    kind: "capability",
+    name: "Base rule",
+    data: { body: "Base" },
+  });
+  const cap = await call<Entity>("entity.create", {
+    kind: "capability",
+    name: "Dependent rule",
+    data: { body: "Own rule", requires: [dependency.id] },
+  });
+  for (const e of [dependency, cap]) {
+    const i = await call<any>("capability.inspect", { id: e.id });
+    await call("capability.review", {
+      id: e.id,
+      expected_revision: e.heads[0].revision,
+      expected_digest: i.digest,
+    });
+  }
+  const props = { writable: true, adapters, onChange: async () => {} };
+  const view = render(<CapabilityWorkspace {...props} refreshSignal={0} />);
+  await click(/Dependent rule/);
+  await screen.findByText("当前正文与依赖已检查，可加入启动计划。");
+  await fill("本机工作目录", "/tmp");
+  await click("生成能力启动计划");
+  await screen.findByText(/"capability_context":/);
+  const latestDependency = await call<Entity>("entity.get", {
+    id: dependency.id,
+  });
+  await call("entity.update", {
+    id: dependency.id,
+    expected_revision: latestDependency.heads[0].revision,
+    data: { body: "Changed base" },
+  });
+  view.rerender(<CapabilityWorkspace {...props} refreshSignal={1} />);
+  await waitFor(() =>
+    expect(screen.queryByText(/"capability_context":/)).toBeNull(),
+  );
+  await screen.findByText("正文或元信息尚待检查 · Base rule");
+  expect(
+    screen
+      .getByRole("button", { name: "生成能力启动计划" })
+      .matches(":disabled"),
+  ).toBe(true);
+});
+
+test("Audit: refresh observes external MCP and session mapping clears without a portable revision change", async () => {
+  await enableIsolatedProbes();
+  const m = await call<Entity>("entity.create", {
+    kind: "mcp",
+    name: "Mapped server",
+    data: { server_key: "mapped" },
+  });
+  await call("mcp.map", {
+    id: m.id,
+    expected_revision: m.heads[0].revision,
+    expected_mapping_revision: "none",
+    mapping: { executable: binary, args: ["mcp"] },
+  });
+  const props = {
+    writable: true,
+    admin: true,
+    probes: true,
+    adapters,
+    onChange: async () => {},
+  };
+  const view = render(<McpWorkspace {...props} refreshSignal={0} />);
+  await click(/Mapped server/);
+  await click("生成 MCP 注册计划");
+  await screen.findByLabelText("可复制的注册文档");
+  const mi = await call<any>("mcp.inspect", {
+    id: m.id,
+    target_agent: "codex",
+  });
+  await call("mcp.clear_mapping", {
+    id: m.id,
+    expected_mapping_revision: mi.mapping.revision,
+  });
+  view.rerender(<McpWorkspace {...props} refreshSignal={1} />);
+  await waitFor(() =>
+    expect(screen.queryByLabelText("可复制的注册文档")).toBeNull(),
+  );
+  await screen.findByText("这台设备尚未配置运行命令");
+  view.unmount();
+  const { session } = await sessionFixture();
+  await call("session.map", {
+    id: session.id,
+    expected_revision: session.heads[0].revision,
+    expected_mapping_revision: "none",
+    mapping: {
+      executable: binary,
+      cwd: dataDir,
+      state_present_confirmed: true,
+    },
+  });
+  const sv = render(sessionUi());
+  await click(/Recorded session/);
+  await click("生成原生恢复计划");
+  await screen.findByLabelText("会话计划");
+  const si = await call<any>("session.inspect", { id: session.id });
+  await call("session.clear_mapping", {
+    id: session.id,
+    expected_mapping_revision: si.mapping.revision,
+  });
+  sv.rerender(sessionUi(true, 1));
+  await waitFor(() => expect(screen.queryByLabelText("会话计划")).toBeNull());
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "生成原生恢复计划" })
+        .matches(":disabled"),
+    ).toBe(true),
+  );
 });

@@ -180,6 +180,9 @@ export function TaskWorkspace({
     !current.conflicted &&
     inspection?.task.revision !== head?.revision,
   );
+  const contextKey = records
+    .map((r) => r.heads.map((h) => h.revision).join(","))
+    .join(";");
   const identities = records.filter(
     (e) => e.kind === "identity" && !e.conflicted && !e.heads[0].deleted,
   );
@@ -231,7 +234,13 @@ export function TaskWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selected, head?.revision, current?.conflicted]);
+  }, [
+    selected,
+    head?.revision,
+    current?.conflicted,
+    contextKey,
+    refreshSignal,
+  ]);
   async function act(fn: () => Promise<void>, mutates = true) {
     setBusy(true);
     setError("");
@@ -1079,7 +1088,11 @@ export function TaskWorkspace({
                                 required
                                 placeholder="这台设备的绝对路径"
                                 value={cwd}
-                                onChange={(e) => setCwd(e.target.value)}
+                                disabled={busy}
+                                onChange={(e) => {
+                                  setCwd(e.target.value);
+                                  setPlan(null);
+                                }}
                               />
                             </label>
                             <button disabled={busy || !cwd.trim()}>

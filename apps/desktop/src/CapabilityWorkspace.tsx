@@ -94,6 +94,9 @@ export function CapabilityWorkspace({
   useUnsavedChanges(dirty, onDirtyChange);
   const current = records.find((r) => r.id === selected);
   const revisionKey = current?.heads.map((h) => h.revision).join(",");
+  const contextKey = records
+    .map((r) => r.heads.map((h) => h.revision).join(","))
+    .join(";");
   async function load() {
     const all = await call<{ entities: Entity[] }>("entity.list", {
       kind: "capability",
@@ -142,14 +145,16 @@ export function CapabilityWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selected, revisionKey, agent]);
-  async function act(fn: () => Promise<void>) {
+  }, [selected, revisionKey, agent, contextKey, refreshSignal]);
+  async function act(fn: () => Promise<void>, mutates = true) {
     setBusy(true);
     setError("");
     try {
       await fn();
-      await load();
-      await onChange();
+      if (mutates) {
+        await load();
+        await onChange();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -675,7 +680,7 @@ export function CapabilityWorkspace({
                                   use_current_identity: false,
                                 }),
                               );
-                            });
+                            }, false);
                           }}
                         >
                           <label>
@@ -684,6 +689,7 @@ export function CapabilityWorkspace({
                               required
                               placeholder="绝对路径"
                               value={cwd}
+                              disabled={busy}
                               onChange={(e) => {
                                 setCwd(e.target.value);
                                 setPlan(null);

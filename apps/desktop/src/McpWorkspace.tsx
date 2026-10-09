@@ -186,7 +186,7 @@ export function McpWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [selected, revisionKey, agent]);
+  }, [selected, revisionKey, agent, refreshSignal]);
   useEffect(() => {
     if (!checking || !selected) return;
     const timer = setInterval(
@@ -195,13 +195,15 @@ export function McpWorkspace({
     );
     return () => clearInterval(timer);
   }, [checking, selected, agent]);
-  async function act(fn: () => Promise<void>) {
+  async function act(fn: () => Promise<void>, mutates = true) {
     setBusy(true);
     setError("");
     try {
       await fn();
-      await load();
-      await onChange();
+      if (mutates) {
+        await load();
+        await onChange();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -796,7 +798,7 @@ export function McpWorkspace({
                                 target_agent: agent,
                               }),
                             );
-                          })
+                          }, false)
                         }
                       >
                         生成 MCP 注册计划

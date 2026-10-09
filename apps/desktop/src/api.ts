@@ -233,7 +233,10 @@ export async function call<T>(
       decryption_failed: "无法解密同步内容，请核对密钥和远端数据。",
       sync_push_failed: "远端已变化或上传失败。本地修改已保留，请重新同步。",
       git_failed: "无法访问 Git 仓库，请检查仓库地址与本机 Git 登录。",
-      credential_not_allowed: "这里应保存凭据引用，登录凭据需单独保管。",
+      nonportable_data:
+        "本机路径、账号引用、环境、配置和原始运行状态不能放入可同步记录，包括扩展字段。请改存对应本机映射。",
+      credential_not_allowed:
+        "登录凭据和秘密值不能放入可同步记录，请分别保存在本机。",
       invalid_key: "请选择有效的 32 字节加密密钥文件。",
       unsafe_key_permissions: "密钥文件权限过于开放，请设置为仅本人可读写。",
       web_unauthorized: "本机服务已重启，请刷新状态重新连接。",

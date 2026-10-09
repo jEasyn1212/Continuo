@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Adapter,
@@ -18,6 +18,7 @@ import { McpWorkspace } from "./McpWorkspace";
 import { CapabilityWorkspace } from "./CapabilityWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { IdentityWorkspace, CurrentIdentity } from "./IdentityWorkspace";
+import { useUnsavedChanges } from "./useUnsavedChanges";
 
 const domains: {
   kind: Kind;
@@ -64,7 +65,7 @@ const domains: {
 ];
 type Page = "overview" | Kind | "agents" | "sync" | "api" | "runtime";
 
-function App() {
+export function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [hasUnsaved, setHasUnsaved] = useState(false);
   const [page, setPage] = useState<Page>("overview");
@@ -75,6 +76,12 @@ function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [editingEntity, setEditingEntity] = useState<Entity | null>(null);
+  const [deviceDirty, setDeviceDirty] = useState(false);
+  const pageRef = useRef(page),
+    refreshSequence = useRef(0);
+  pageRef.current = page;
+  useUnsavedChanges(page === "device" && deviceDirty);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [agentCapabilities, setAgentCapabilities] = useState<string[]>([]);
@@ -96,13 +103,18 @@ function App() {
   const current = entities.find((e) => e.id === selected);
 
   function navigate(next: Page) {
-    if (next === page) return;
+    if (next === page || busy) return;
     if (hasUnsaved && !window.confirm("放弃尚未保存的工作记录并切换模块？"))
       return;
     setHasUnsaved(false);
+    setDeviceDirty(false);
     setPage(next);
   }
   async function refresh() {
+    if (pageRef.current !== page) return;
+    const sequence = ++refreshSequence.current;
+    const stillCurrent = () =>
+      pageRef.current === page && refreshSequence.current === sequence;
     try {
       const nextConnection = await connect();
       const [nextStatus, nextEntities, nextAdapters, nextIdentity] =
@@ -115,12 +127,14 @@ function App() {
           call<{ adapters: Adapter[] }>("agent.list"),
           call<CurrentIdentity>("identity.current"),
         ]);
+      if (!stillCurrent()) return;
       setStatus(nextStatus);
       setEntities(nextEntities.entities);
       setAdapters(nextAdapters.adapters);
       setActiveIdentity(nextIdentity);
       setConnection(nextConnection);
     } catch (error) {
+      if (!stillCurrent()) return;
       setConnection(null);
       setStatus(null);
       setEntities([]);
@@ -145,9 +159,22 @@ function App() {
   useEffect(() => {
     setSelected(null);
     setEditing(false);
+    setEntities([]);
+    setPlan(null);
     setError("");
     void refresh().catch((e) => setError(String(e)));
   }, [page]);
+
+  const agentContextKey =
+    entities.map((e) => e.heads.map((h) => h.revision).join(",")).join(";") +
+    ":" +
+    activeIdentity?.selection.revision;
+  useEffect(() => {
+    setPlan(null);
+  }, [agentContextKey]);
+  useEffect(() => {
+    if (page === "device") setHasUnsaved(deviceDirty);
+  }, [page, deviceDirty]);
 
   useEffect(() => {
     if (page !== "agents" || agentIdentity !== "current") return;
@@ -159,7 +186,16 @@ function App() {
       setAgent(preferred);
   }, [page, agentIdentity, activeIdentity?.selection.revision]);
 
+  function discardDevice() {
+    if (busy || (deviceDirty && !window.confirm("放弃尚未保存的设备记录？")))
+      return false;
+    setDeviceDirty(false);
+    setHasUnsaved(false);
+    return true;
+  }
   function newEntity() {
+    if (!discardDevice()) return;
+    setEditingEntity(null);
     setName("");
     setDescription("");
     setEditing(true);
@@ -167,6 +203,7 @@ function App() {
   }
   function editEntity() {
     if (!current || current.conflicted) return;
+    setEditingEntity(current);
     setName(current.heads[0].name);
     setDescription(
       String(
@@ -180,10 +217,10 @@ function App() {
   async function save() {
     if (!domain || !name.trim()) return;
     const field = domain.kind === "identity" ? "instructions" : "description";
-    if (current) {
-      const head = current.heads[0];
+    if (editingEntity) {
+      const head = editingEntity.heads[0];
       await call("entity.update", {
-        id: current.id,
+        id: editingEntity.id,
         expected_revision: head.revision,
         name,
         data: { ...head.data, [field]: description },
@@ -197,6 +234,8 @@ function App() {
       setSelected(created.id);
     }
     setEditing(false);
+    setDeviceDirty(false);
+    setHasUnsaved(false);
   }
 
   return (
@@ -526,7 +565,9 @@ function App() {
                           selected === e.id ? "entity selected" : "entity"
                         }
                         key={e.id}
+                        disabled={busy}
                         onClick={() => {
+                          if (!discardDevice()) return;
                           setSelected(e.id);
                           setEditing(false);
                         }}
@@ -547,7 +588,7 @@ function App() {
                         }}
                       >
                         <h2>
-                          {current ? "编辑" : "新建"}
+                          {editingEntity ? "编辑" : "新建"}
                           {domain.label}
                         </h2>
                         <label>
@@ -555,8 +596,12 @@ function App() {
                           <input
                             autoFocus
                             required
+                            disabled={busy || !writable}
                             value={name}
-                            onChange={(e) => setName(e.target.value)}
+                            onChange={(e) => {
+                              setName(e.target.value);
+                              setDeviceDirty(true);
+                            }}
                             maxLength={200}
                           />
                         </label>
@@ -566,17 +611,24 @@ function App() {
                             : "说明与工作记录"}
                           <textarea
                             value={description}
-                            onChange={(e) => setDescription(e.target.value)}
+                            disabled={busy || !writable}
+                            onChange={(e) => {
+                              setDescription(e.target.value);
+                              setDeviceDirty(true);
+                            }}
                             rows={9}
                           />
                         </label>
                         <p className="help">
-                          记录明确的上下文和凭据引用。登录凭据单独保存在设备上。
+                          这里只登记可携带的设备说明；本机路径、账号引用和登录凭据分别留在设备上。
                         </p>
                         <div className="form-actions">
                           <button
                             type="button"
-                            onClick={() => setEditing(false)}
+                            disabled={busy}
+                            onClick={() => {
+                              if (discardDevice()) setEditing(false);
+                            }}
                           >
                             取消
                           </button>
@@ -593,7 +645,10 @@ function App() {
                         <div className="detail-title">
                           <h2>{current.heads[0].name}</h2>
                           {!current.conflicted && (
-                            <button onClick={editEntity} disabled={!writable}>
+                            <button
+                              onClick={editEntity}
+                              disabled={!writable || busy}
+                            >
                               编辑
                             </button>
                           )}
@@ -705,6 +760,7 @@ function App() {
                 <label>
                   Agent
                   <select
+                    disabled={busy || !connected}
                     value={agent}
                     onChange={(e) => {
                       setAgent(e.target.value);
@@ -719,6 +775,7 @@ function App() {
                 <label>
                   工作身份
                   <select
+                    disabled={busy || !connected}
                     value={agentIdentity}
                     onChange={(e) => {
                       setAgentIdentity(e.target.value);
@@ -757,7 +814,10 @@ function App() {
                       ))}
                   </select>
                 </label>
-                <fieldset className="binding-field">
+                <fieldset
+                  className="binding-field"
+                  disabled={busy || !connected}
+                >
                   <legend>本次额外能力</legend>
                   <p className="help">
                     身份绑定的能力自动加入；这里可以追加选择。生成时会检查正文、依赖与适用性。
@@ -821,6 +881,7 @@ function App() {
                   <input
                     required
                     placeholder="绝对路径"
+                    disabled={busy || !connected}
                     value={cwd}
                     onChange={(e) => {
                       setCwd(e.target.value);
@@ -831,6 +892,7 @@ function App() {
                 <label>
                   开始时的工作指令
                   <textarea
+                    disabled={busy || !connected}
                     value={prompt}
                     onChange={(e) => {
                       setPrompt(e.target.value);
@@ -883,6 +945,7 @@ function App() {
                 <label>
                   操作
                   <select
+                    disabled={busy || !connected}
                     value={apiMethod}
                     onChange={(e) => {
                       setApiMethod(e.target.value);
@@ -908,6 +971,7 @@ function App() {
                   JSON 参数
                   <textarea
                     rows={8}
+                    disabled={busy || !connected}
                     value={apiInput}
                     onChange={(e) => setApiInput(e.target.value)}
                     spellCheck={false}
@@ -966,8 +1030,10 @@ function App() {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+const root = document.getElementById("root");
+if (root)
+  createRoot(root).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  );

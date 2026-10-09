@@ -54,6 +54,89 @@ fn task(s: &Service) -> Value {
     s.call("entity.create",json!({"kind":"task","name":"Portable work","data":{"goal":"Review changes","next_steps":["Check evidence"]}})).unwrap()
 }
 #[test]
+fn legacy_nonportable_history_blocks_preview_and_exchange_before_import_or_publish() {
+    let (t, a, b, remote, _) = fixture();
+    task(&a);
+    a.call("sync.run", json!({})).unwrap();
+    let local = task(&b);
+    let mut legacy = local["heads"][0].clone();
+    legacy["data"]["extension"] = json!({"cwd":"/synthetic/legacy/path"});
+    // Simulate a record written by an older client, only in this temporary database.
+    let conn = rusqlite::Connection::open(b.store.data_dir.join("continuo.sqlite")).unwrap();
+    conn.execute(
+        "UPDATE events SET payload=?1 WHERE revision=?2",
+        rusqlite::params![
+            serde_json::to_string(&legacy).unwrap(),
+            legacy["revision"].as_str().unwrap()
+        ],
+    )
+    .unwrap();
+    let tip = git(
+        t.path(),
+        &[
+            "--git-dir",
+            remote.to_str().unwrap(),
+            "rev-parse",
+            "refs/heads/continuo-sync",
+        ],
+    );
+    for method in ["sync.preview", "sync.run"] {
+        assert_eq!(
+            b.call(method, json!({})).unwrap_err().code,
+            "nonportable_data"
+        );
+        assert_eq!(b.store.events().unwrap().len(), 1);
+        assert!(b.store.metadata("sync_checkpoint").unwrap().is_none());
+        assert_eq!(
+            git(
+                t.path(),
+                &[
+                    "--git-dir",
+                    remote.to_str().unwrap(),
+                    "rev-parse",
+                    "refs/heads/continuo-sync"
+                ]
+            ),
+            tip
+        );
+    }
+    assert_eq!(b.store.events().unwrap()[0].data, legacy["data"]);
+}
+#[test]
+fn concurrent_tombstones_remain_visible_in_all_conflict_counts_and_preserve_history() {
+    let (_t, a, _b, _remote, _key) = fixture();
+    let original = task(&a);
+    let mut first: continuo_core::model::Event =
+        serde_json::from_value(original["heads"][0].clone()).unwrap();
+    first.parents = vec![first.revision.clone()];
+    first.revision = uuid::Uuid::new_v4().to_string();
+    first.deleted = true;
+    let mut second = first.clone();
+    second.revision = uuid::Uuid::new_v4().to_string();
+    second.device_id = uuid::Uuid::new_v4().to_string();
+    a.store
+        .import_events(&[first.clone(), second.clone()])
+        .unwrap();
+    assert_eq!(a.call("system.status", json!({})).unwrap()["conflicts"], 1);
+    assert_eq!(
+        a.call("system.status", json!({})).unwrap()["counts"]["task"],
+        0
+    );
+    assert_eq!(
+        a.call("sync.inspect", json!({})).unwrap()["conflicts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(a.call("sync.preview", json!({})).unwrap()["conflicts"], 1);
+    assert_eq!(a.call("sync.run", json!({})).unwrap()["conflicts"], 1);
+    let merged = a.call("entity.resolve", json!({"id":original["id"], "expected_heads":[first.revision, second.revision], "name":"Portable work", "data":original["heads"][0]["data"], "deleted":true})).unwrap();
+    assert_eq!(merged["conflicted"], false);
+    assert_eq!(a.store.events().unwrap().len(), 4);
+    assert_eq!(a.call("system.status", json!({})).unwrap()["conflicts"], 0);
+}
+#[test]
 fn preview_tracks_observed_pending_counts_without_importing_and_offline_retry_and_pause_preserve_local_events(
 ) {
     let (t, a, b, remote, _) = fixture();
