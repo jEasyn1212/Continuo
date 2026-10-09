@@ -68,6 +68,7 @@ test("Web uses real core records, CLI shares data, and optimistic writes remain 
     admin: true,
     sync: false,
     probes: false,
+    processes: false,
   });
   const created = (
     await f.call("entity.create", {
@@ -815,4 +816,128 @@ test("Generated configuration plans and rollback share service authorization acr
     ),
     false,
   );
+});
+
+test("Web lifecycle remains off by default and authorized simulation survives bridge restart", async (t) => {
+  const limited = await fixture(t, { writes: true, admin: true });
+  assert.equal(limited.data.permissions.processes, false);
+  assert.equal(
+    (await limited.call("process.start", { confirm_simulation: true })).body
+      .error.code,
+    "permission_denied",
+  );
+  const f = await fixture(t, { writes: true, admin: true, processes: true });
+  const entity = (
+    await f.call("entity.create", {
+      kind: "mcp",
+      name: "owned",
+      data: { transport: "stdio", server_key: "owned" },
+    })
+  ).body.data;
+  assert.equal(
+    (
+      await f.call("mcp.map", {
+        id: entity.id,
+        expected_revision: entity.heads[0].revision,
+        expected_mapping_revision: "none",
+        mapping: { executable: binary, args: ["mcp"] },
+      })
+    ).body.ok,
+    true,
+  );
+  const preview = (
+    await f.call("deployment.plan", {
+      target_agent: "codex",
+      mcp_id: entity.id,
+    })
+  ).body.data;
+  const deployment = (
+    await f.call("deployment.apply", {
+      target_agent: "codex",
+      mcp_id: entity.id,
+      expected_revision: "none",
+      plan_digest: preview.plan_digest,
+      confirm_generated_home: true,
+    })
+  ).body.data;
+  const run_id = randomUUID();
+  const input = {
+    target_agent: "codex",
+    expected_revision: deployment.expected_revision,
+    run_id,
+    confirm_simulation: true,
+    duration_ms: 10000,
+    timeout_ms: 15000,
+    output_bytes: 131072,
+  };
+  assert.equal(
+    (await f.call("process.start", { ...input, confirm_simulation: false }))
+      .body.error.code,
+    "process_confirmation_required",
+  );
+  assert.equal((await f.call("process.start", input)).body.ok, true);
+  const until = async (read, predicate) => {
+    const deadline = Date.now() + 7000;
+    while (Date.now() < deadline) {
+      const value = await read();
+      if (predicate(value)) return value;
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    assert.fail("simulation did not reach expected state");
+  };
+  const running = await until(
+    async () => (await f.call("process.inspect", { run_id })).body.data,
+    (j) => j.stdout_bytes > 4096 && j.worker_pid,
+  );
+  assert.equal(running.stdout.length, 4096);
+  assert.equal(running.stdout_truncated, true);
+  assert.equal(running.real_agent_executed, false);
+  await f.close();
+  const restarted = await startWebServer({
+    binary,
+    assets: path.join(f.dir, "assets"),
+    dataDir: f.dataDir,
+    port: 0,
+    writes: true,
+    admin: true,
+  });
+  t.after(() => restarted.close());
+  const boot = await (
+    await fetch(`${restarted.url}/api/bootstrap`, {
+      headers: { "X-Continuo-Client": "web-v1" },
+    })
+  ).json();
+  const callAgain = async (method, params) =>
+    await (
+      await fetch(`${restarted.url}/api/call`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Continuo-Client": "web-v1",
+          Authorization: `Bearer ${boot.data.token}`,
+        },
+        body: JSON.stringify({ method, params }),
+      })
+    ).json();
+  assert.equal(
+    (await callAgain("process.inspect", { run_id })).data.owner_present,
+    true,
+  );
+  assert.equal(boot.data.permissions.processes, false);
+  assert.equal(
+    (
+      await callAgain("process.stop", {
+        run_id,
+        expected_control_revision: running.control_revision,
+        confirm_stop: true,
+      })
+    ).ok,
+    true,
+  );
+  const done = await until(
+    async () => (await callAgain("process.inspect", { run_id })).data,
+    (j) => j.termination_verified,
+  );
+  assert.equal(done.state, "stopped");
+  assert.equal(done.portable, false);
 });

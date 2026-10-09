@@ -310,6 +310,17 @@ pub fn prepare(
     adapter: &dyn AgentAdapter,
 ) -> Result<Value> {
     let tx = Transaction::new_unchecked(&store.conn, TransactionBehavior::Deferred)?;
+    let out = prepare_in_snapshot(store, id, expected, adapter)?;
+    tx.commit()?;
+    Ok(out)
+}
+/// Caller owns the read/write transaction, keeping source checks in that exact snapshot.
+pub(crate) fn prepare_in_snapshot(
+    store: &Store,
+    id: &str,
+    expected: Option<&str>,
+    adapter: &dyn AgentAdapter,
+) -> Result<Value> {
     let e = live(store, id)?;
     if expected.is_some_and(|r| r != e.revision) {
         return Err(Error::new("revision_conflict", "MCP definition changed"));
@@ -328,7 +339,6 @@ pub fn prepare(
     let registration =
         adapter.prepare_mcp(&p.server_key, &m.executable, &m.args, m.cwd.as_deref())?;
     let out = json!({"id":id,"definition_revision":e.revision,"mapping_revision":m.revision,"scope":"device","target_agent":adapter.descriptor().id,"registration":registration,"config_written":false,"executed":false,"connection_verified":false,"permissions_granted":false});
-    tx.commit()?;
     Ok(out)
 }
 pub fn cancel(store: &Store, id: &str, probe_id: &str) -> Result<Value> {

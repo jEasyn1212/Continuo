@@ -88,3 +88,12 @@ sync.configure 可用 expected_config_revision；sync.set_enabled 必须匹配�
 deployment.inspect / plan / launch_plan 为只读；deployment.apply / rollback 需写与 admin。全部来自共享目录，App/Web 接口控制台与 CLI/MCP 可调用。apply 必须提供 mcp_id、target_agent、expected_revision、plan_digest、confirm_generated_home:true；rollback 提供 expected_revision 与明确 target_revision。
 
 仅生成 vault 内的新 home，不接受个人配置路径，不执行程序、不建立认证。源定义/映射变化、文件改动或过期选择阻止计划/投递。rollback 重新选择已有完整 generation，不覆盖文件或迁移会话。详见 [受管投递](managed-deployment.md)。
+
+
+## 受管模拟生命周期
+
+process.list / inspect 为本机只读查询，list 最多返回 100 次运行。process.start 需独立 processes 许可、写/admin 和 confirm_simulation:true；只运行接口内置的项目模拟程序，不接受 executable/argv/cwd。参数为 target_agent、expected_revision、run_id，以及可选 duration_ms (100..10000，默认1000)、timeout_ms (100..15000，默认5000)、exit_code (0..125，默认0)、output_bytes (0..131072，默认256)、ignore_stop (默认false，用于故障夹具)。选择和源定义/映射在同一写事务内复核，run_id 只能使用一次。
+
+process.stop {run_id,expected_control_revision,confirm_stop:true} 与 process.recover {run_id,expected_control_revision,confirm_recovery:true} 需写/admin；输出刷新不改变 control_revision，控制请求和终态改变它。停止仅请求监管者结束自己的子进程。恢复仅在监管锁已释放后记录 interrupted，termination_verified:false，不结束、接管旧 PID 或自动重启。可读 run_id、state/observed_state、owner_present、stdout/stderr、字节数/截断、exit_code/signal、termination_verified。每路文本上限4096字节，只存本机 metadata。
+
+CLI --allow-managed-processes 显式开启启动；MCP/Web 还需 --allow-writes --allow-admin。默认关闭，probes/sync 许可不会开启它。App 默认没有持久 processes 许可；仅明确确认的 process.start 请求授予本次模拟启动。全部经 Service::call 校验，不读取私人配置。详见 [演示路径和故障边界](managed-processes.md)。

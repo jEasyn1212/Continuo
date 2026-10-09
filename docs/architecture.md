@@ -45,3 +45,9 @@ Tauri 桥接在 blocking worker 上调用服务。桌面、CLI 与 MCP 默认使
 Web 启动时创建一次性内存 token；页面从同源 bootstrap 获取它，API 请求携带 Authorization 和固定客户端头。服务检查 Host、Origin、内容类型、请求大小与静态文件真实路径；不开放 CORS。权限在启动 MCP 子进程时指定，所有操作仍经过 Rust 服务校验。token 不放入 URL、日志或浏览器持久存储。该边界防止跨站浏览器请求，不隔离拥有本机访问权限的其他进程。
 
 Web 的资产和本机桥接可在没有 Tauri App 的情况下独立使用，需要 Node、CLI 二进制与构建后的 HTML/CSS/JS；App 不需要 Node 或 Web 服务才能运行。当前尚未提供自动安装、后台托管和签名分发工作流。
+
+## 受管 home 与本机模拟生命周期
+
+prepare_managed_config 契约由 adapter 生成单个 MCP 注册文件及相对配置根；通用 deployment 服务生成新 home 并以本机 CAS 指针选择，保留历史。进程服务通过同一 Service::call/catalog，仅接收接口注入的自身二进制，不接受来自 API 的 executable/argv/cwd；它消费已验证 home/environment，却不会执行 adapter 的真实 agent 计划。
+
+本机 metadata 保存 run/control_revision/受限输出，文件锁表明独立监管者是否存在。监管者用自己的 Child 句柄停止与回收；接口退出不结束监管者，监管者崩溃则固定模拟 worker 因 stdin EOF 退出。恢复只在锁释放后确认 interrupted，不凭保存 PID 接管、杀进程或自动重试。home、进程、环境与输出不进入同步事件；这些机制不构成安全沙箱或账号隔离。详见 [生命周期契约](managed-processes.md)。

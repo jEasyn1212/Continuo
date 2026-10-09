@@ -19,8 +19,15 @@ async fn api_call(app: tauri::AppHandle, method: String, params: Value) -> Value
         {
             policy.probes = true;
         }
+        if method == "system.describe"
+            || (method == "process.start" && params["confirm_simulation"] == true)
+        {
+            policy.processes = true;
+        }
         envelope(
-            Service::open(&state.path, policy).and_then(|service| service.call(&method, params)),
+            Service::open(&state.path, policy)
+                .and_then(|service| Ok(service.with_simulator(std::env::current_exe()?)))
+                .and_then(|service| service.call(&method, params)),
         )
     })
     .await
@@ -33,6 +40,15 @@ async fn api_call(app: tauri::AppHandle, method: String, params: Value) -> Value
     }
 }
 fn main() {
+    if let Some(result) =
+        continuo_core::process::internal_entry(&std::env::args().skip(1).collect::<Vec<_>>())
+    {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     tauri::Builder::default()
         .setup(|app| {
             let path = continuo_core::default_data_dir()?;
@@ -41,6 +57,7 @@ fn main() {
                 sync: true,
                 admin: true,
                 probes: false,
+                processes: false,
             };
             Service::open(&path, policy)?;
             app.manage(AppState { path, policy });

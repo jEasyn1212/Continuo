@@ -11,6 +11,7 @@ import {
   Status,
 } from "./api";
 import "./style.css";
+import { ManagedWorkspace } from "./ManagedWorkspace";
 import { SyncWorkspace } from "./SyncWorkspace";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { McpWorkspace } from "./McpWorkspace";
@@ -61,7 +62,7 @@ const domains: {
     description: "记录设备与环境，映射各自的执行位置。",
   },
 ];
-type Page = "overview" | Kind | "agents" | "sync" | "api";
+type Page = "overview" | Kind | "agents" | "sync" | "api" | "runtime";
 
 function App() {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -263,6 +264,12 @@ function App() {
             <span>↗</span>Agent 适配
           </button>
           <button
+            className={page === "runtime" ? "active" : ""}
+            onClick={() => navigate("runtime")}
+          >
+            <span>▷</span>受管运行
+          </button>
+          <button
             className={page === "sync" ? "active" : ""}
             onClick={() => navigate("sync")}
           >
@@ -277,7 +284,7 @@ function App() {
         </nav>
         <div className="sidebar-foot">
           <span className="pill">本地优先</span>
-          <small>0.1.1 · App / Web</small>
+          <small>0.7.0 · App / Web</small>
         </div>
       </aside>
       <main>
@@ -290,6 +297,7 @@ function App() {
                   overview: "概览",
                   agents: "Agent 适配",
                   sync: "跨设备同步",
+                  runtime: "受管运行",
                   api: "接口控制台",
                 } as Record<string, string>
               )[page]}
@@ -926,6 +934,17 @@ function App() {
                 )}
               </form>
             </>
+          )}
+          {page === "runtime" && connected && (
+            <ManagedWorkspace
+              adapters={adapters}
+              writable={writable}
+              admin={!!connection?.permissions.admin}
+              executionAllowed={!!connection?.permissions.processes}
+              refreshSignal={status}
+              onChange={refresh}
+              onDirtyChange={setHasUnsaved}
+            />
           )}
           {page === "sync" && connected && (
             <SyncWorkspace

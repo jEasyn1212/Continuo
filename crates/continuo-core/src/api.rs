@@ -2,13 +2,13 @@ use crate::{
     adapters::{LaunchRequest, Registry},
     capability, crypto, deployment, identity, mcp,
     model::KINDS,
-    session,
+    process, session,
     store::Store,
     sync, task, Error, Result,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy)]
 pub struct Policy {
@@ -16,6 +16,7 @@ pub struct Policy {
     pub sync: bool,
     pub admin: bool,
     pub probes: bool,
+    pub processes: bool,
 }
 impl Policy {
     pub fn local_user() -> Self {
@@ -24,6 +25,7 @@ impl Policy {
             sync: false,
             admin: true,
             probes: false,
+            processes: false,
         }
     }
     pub fn read_only() -> Self {
@@ -32,6 +34,7 @@ impl Policy {
             sync: false,
             admin: false,
             probes: false,
+            processes: false,
         }
     }
 }
@@ -64,7 +67,7 @@ fn op(
         writes,
         network,
         admin,
-        execution: method == "mcp.probe",
+        execution: matches!(method, "mcp.probe" | "process.start"),
     }
 }
 pub fn operations() -> Vec<Operation> {
@@ -207,6 +210,11 @@ fn operations_for(registry: &Registry) -> Vec<Operation> {
             false,
             false,
         ),
+        op("process.list", "List up to 100 device-local simulation runs; no native agent execution or portable runtime state",json!({}),&[],false,false,false),
+        op("process.inspect", "Read bounded output and lease-based ownership for one simulation run; PID is informational only",json!({"run_id":string}),&["run_id"],false,false,false),
+        op("process.start", "Explicitly launch only the built-in Continuo simulator in the exact generated home; never execute agent or MCP commands",json!({"target_agent":agent,"expected_revision":string,"run_id":string,"confirm_simulation":{"type":"boolean"},"duration_ms":{"type":"integer","minimum":100,"maximum":10000},"timeout_ms":{"type":"integer","minimum":100,"maximum":15000},"exit_code":{"type":"integer","minimum":0,"maximum":125},"output_bytes":{"type":"integer","minimum":0,"maximum":131072},"ignore_stop":{"type":"boolean"}}),&["target_agent","expected_revision","run_id","confirm_simulation"],true,false,true),
+        op("process.stop", "Confirm cancellation of the exact run revision; supervisor signals only its owned child, never a saved PID",json!({"run_id":string,"expected_control_revision":string,"confirm_stop":{"type":"boolean"}}),&["run_id","expected_control_revision","confirm_stop"],true,false,true),
+        op("process.recover", "Confirm interruption after loss of the supervisor lease; does not kill or adopt a persisted PID, nor auto-restart",json!({"run_id":string,"expected_control_revision":string,"confirm_recovery":{"type":"boolean"}}),&["run_id","expected_control_revision","confirm_recovery"],true,false,true),
         op("deployment.inspect", "Inspect device-local generated configuration selection and file integrity; no account authentication",json!({"target_agent":agent}),&["target_agent"],false,false,false),
         op("deployment.plan", "Preview a single MCP native file for a new generated home; never merge personal configuration",json!({"target_agent":agent,"mcp_id":string}),&["target_agent","mcp_id"],false,false,false),
         op("deployment.apply", "Apply the exact reviewed plan to a new device-local home and CAS-select it; never execute an agent or copy credentials",json!({"target_agent":agent,"mcp_id":string,"expected_revision":string,"plan_digest":string,"confirm_generated_home":{"type":"boolean"}}),&["target_agent","mcp_id","expected_revision","plan_digest","confirm_generated_home"],true,false,true),
@@ -260,6 +268,7 @@ pub struct Service {
     pub store: Store,
     pub registry: Registry,
     pub policy: Policy,
+    pub simulator: Option<PathBuf>,
 }
 impl Service {
     pub fn open(path: &Path, policy: Policy) -> Result<Self> {
@@ -267,7 +276,20 @@ impl Service {
             store: Store::open(path)?,
             registry: Registry::default(),
             policy,
+            simulator: None,
         })
+    }
+    /// Interface supplies its own trusted executable; API input cannot select a program.
+    pub fn with_simulator(mut self, path: PathBuf) -> Self {
+        self.simulator = Some(path);
+        self
+    }
+    fn execution_allowed(&self, method: &str) -> bool {
+        if method == "process.start" {
+            self.policy.processes
+        } else {
+            self.policy.probes
+        }
     }
     pub fn available(&self) -> Vec<Operation> {
         operations_for(&self.registry)
@@ -276,7 +298,7 @@ impl Service {
                 (!o.writes || self.policy.writes)
                     && (!o.network || self.policy.sync)
                     && (!o.admin || self.policy.admin)
-                    && (!o.execution || self.policy.probes)
+                    && (!o.execution || self.execution_allowed(o.method))
             })
             .collect()
     }
@@ -288,7 +310,7 @@ impl Service {
         if (operation.writes && !self.policy.writes)
             || (operation.network && !self.policy.sync)
             || (operation.admin && !self.policy.admin)
-            || (operation.execution && !self.policy.probes)
+            || (operation.execution && !self.execution_allowed(method))
         {
             return Err(Error::new(
                 "permission_denied",
@@ -724,6 +746,28 @@ impl Service {
                 crypto::generate_key(Path::new(text("path")?))?;
                 Ok(json!({"created":true,"key_material_returned":false}))
             }
+            "process.list" => process::list(&self.store),
+            "process.inspect" => process::inspect(&self.store, text("run_id")?),
+            "process.start" => process::start(
+                &self.store,
+                self.registry.get(text("target_agent")?)?,
+                self.simulator.as_deref(),
+                &params,
+            ),
+            "process.stop" => process::control(
+                &self.store,
+                text("run_id")?,
+                text("expected_control_revision")?,
+                params["confirm_stop"] == true,
+                false,
+            ),
+            "process.recover" => process::control(
+                &self.store,
+                text("run_id")?,
+                text("expected_control_revision")?,
+                params["confirm_recovery"] == true,
+                true,
+            ),
             "deployment.inspect" => {
                 deployment::inspect(&self.store, self.registry.get(text("target_agent")?)?)
             }

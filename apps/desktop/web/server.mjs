@@ -99,6 +99,7 @@ export async function startWebServer(options = {}) {
                 sync: !!options.sync,
                 admin: !!options.admin,
                 probes: !!options.probes,
+                processes: !!options.processes,
               },
             },
           });
@@ -240,7 +241,7 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
     console.log(
-      "Continuo local Web\nnode web/server.mjs [--data-dir PATH] [--binary PATH] [--assets PATH] [--port 1421]\n  [--allow-writes] [--allow-admin] [--allow-sync] [--allow-mcp-probes]\nDefault: read-only, loopback only. Build the CLI and renderer first.",
+      "Continuo local Web\nnode web/server.mjs [--data-dir PATH] [--binary PATH] [--assets PATH] [--port 1421]\n  [--allow-writes] [--allow-admin] [--allow-sync] [--allow-mcp-probes] [--allow-managed-processes]\nDefault: read-only, loopback only. Build the CLI and renderer first.",
     );
     return;
   }
@@ -251,6 +252,7 @@ async function main() {
       "--allow-sync": "sync",
       "--allow-admin": "admin",
       "--allow-mcp-probes": "probes",
+      "--allow-managed-processes": "processes",
     };
     const values = {
       "--data-dir": "dataDir",

@@ -14,6 +14,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { call, connect, Adapter, Entity, Event as StoredEvent } from "./api";
+import { ManagedWorkspace } from "./ManagedWorkspace";
 import { SyncWorkspace } from "./SyncWorkspace";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { McpWorkspace } from "./McpWorkspace";
@@ -940,3 +941,104 @@ test("Sync conflicts keep both real encrypted device versions until an explicit 
   );
   expect(merged.heads[0].data.goal).toBe("Keep both choices");
 }, 20000);
+
+async function managedUi(allowed = true) {
+  await service.close();
+  service = await startWebServer({
+    binary,
+    assets: path.join(directory, "assets"),
+    dataDir,
+    port: 0,
+    writes: true,
+    admin: true,
+    processes: allowed,
+  });
+  await connect();
+  const entity = await call<any>("entity.create", {
+    kind: "mcp",
+    name: "Owned test server",
+    data: { transport: "stdio", server_key: "owned" },
+  });
+  await call("mcp.map", {
+    id: entity.id,
+    expected_revision: entity.heads[0].revision,
+    expected_mapping_revision: "none",
+    mapping: { executable: binary, args: ["mcp"] },
+  });
+  render(
+    <ManagedWorkspace
+      adapters={adapters}
+      writable={true}
+      admin={true}
+      executionAllowed={allowed}
+      refreshSignal={0}
+      onChange={async () => {}}
+    />,
+  );
+  return entity;
+}
+test("Managed forms preview, confirm deployment, retain rollback versions and control a real built-in process", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const e = await managedUi();
+  await fill("MCP 定义", e.id);
+  await click("预览配置文件");
+  await screen.findByLabelText("配置预览");
+  await click("确认投递配置");
+  await screen.findByText("完整性：文件完整");
+  const first = await call<any>("deployment.inspect", {
+    target_agent: "codex",
+  });
+  await click("预览配置文件");
+  await click("确认投递配置");
+  await waitFor(async () =>
+    expect(
+      (await call<any>("deployment.inspect", { target_agent: "codex" }))
+        .expected_revision,
+    ).not.toBe(first.expected_revision),
+  );
+  await click("回滚上一选择");
+  await waitFor(async () =>
+    expect(
+      (await call<any>("deployment.inspect", { target_agent: "codex" })).active
+        .generation,
+    ).toBe(first.active.generation),
+  );
+  await fill("运行时长（毫秒）", "10000");
+  await fill("超时（毫秒）", "15000");
+  confirm.mockReturnValue(false);
+  await click("确认启动模拟程序");
+  expect((await call<any>("process.list")).runs).toHaveLength(0);
+  confirm.mockReturnValue(true);
+  await click("确认启动模拟程序");
+  await waitFor(
+    () =>
+      expect(screen.getByLabelText("运行标准输出").textContent).toContain(
+        "Continuo simulator only",
+      ),
+    { timeout: 5000 },
+  );
+  expect(
+    screen.getByRole("button", { name: "回滚上一选择" }).matches(":disabled"),
+  ).toBe(true);
+  await click("停止此运行");
+  await waitFor(
+    () => expect(screen.getByRole("status").textContent).toContain("已停止"),
+    { timeout: 5000 },
+  );
+  expect(screen.getByText(/子进程结束：已确认并回收/)).toBeTruthy();
+  expect((await call<any>("process.list")).runs[0].real_agent_executed).toBe(
+    false,
+  );
+});
+test("Managed Web UI exposes closed execution and service rejects direct escalation", async () => {
+  await managedUi(false);
+  expect(
+    screen
+      .getByRole("button", { name: "确认启动模拟程序" })
+      .matches(":disabled"),
+  ).toBe(true);
+  expect(screen.getByText(/执行能力默认关闭/)).toBeTruthy();
+  await expect(
+    call("process.start", { confirm_simulation: true }),
+  ).rejects.toThrow("当前入口未获授权");
+});

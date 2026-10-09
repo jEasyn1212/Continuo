@@ -1127,3 +1127,21 @@ button.danger {
   line-height: 1.8;
   color: var(--muted);
 }
+
+.managed-workspace {
+  display: grid;
+  gap: 18px;
+}
+.managed-workspace .settings-form {
+  display: grid;
+  gap: 16px;
+}
+.managed-workspace pre {
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.managed-workspace code {
+  overflow-wrap: anywhere;
+}

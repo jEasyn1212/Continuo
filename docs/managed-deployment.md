@@ -1,4 +1,4 @@
-# 下一里程碑：受管配置投递与回滚
+# 受管配置投递与回滚
 
 这是 0.7 后的源码阶段，先补配置闭环。仅投递单个已有 MCP 定义的注册文件到 Continuo 自己生成的 home，不合并或改写个人 home，不执行 agent，不处理账号、凭据、密钥或同步访问。
 
@@ -8,8 +8,8 @@
 - deployment.plan 预览当前 MCP 定义/本机映射生成的确切文件及 plan_digest。
 - deployment.apply 需要写/admin、明确确认、相同 plan_digest 和当前选择 revision。重新核对定义/映射版本，文件先完整写入新 UUID generation，最后在 SQLite 事务中发布本机当前指针；失败不替换旧指针。
 - deployment.inspect 显示文件完整性、当前 home 与本机选择版本。
-- deployment.rollback 选择已有完整 generation，产生新的选择 revision。旧 home 和外部改动都保留，不复制运行时状态，不停止进程。被破坏的当前 home 可以退出选择，但目标 home 必须通过完整性检查。
-- deployment.launch_plan 对当前文件、源定义和映射复核，返回 argv 和 inherit_env:false 的显式环境计划。执行仍未实现；调用方必须按计划清空继承环境，不能仅覆盖几个变量。
+- deployment.rollback 选择已有完整 generation，产生新的选择 revision。旧 home 和外部改动都保留，不复制运行时状态，不停止进程；存在未结束的受管模拟运行时投递/回滚均拒绝。被破坏的当前 home 可以退出选择，但目标 home 必须通过完整性检查。
+- deployment.launch_plan 对当前文件、源定义和映射复核，返回 argv 和 inherit_env:false 的显式环境计划。真实 agent 执行仍未实现；调用方必须按计划清空继承环境，不能仅覆盖几个变量。内置模拟生命周期见 [受管运行](managed-processes.md)。
 
 路径仅能落在当前 vault 的 managed-homes/<adapter>/generations/<UUID>，不接受个人 home 参数。目录/文件的符号链接与硬链接受检查，Unix 目录 700、文件 600。不是同用户恶意进程的安全沙箱。每个 adapter 暂只有一个当前选择；第一份配置没有旧 generation 可回滚，尚无清空选择入口。暂不清除旧 generations；它们可能在未来运行后含状态，不能作为同步或备份配置上传。
 

@@ -215,6 +215,7 @@ pub fn apply(
     }
     let agent = adapter.descriptor().id;
     let tx = Transaction::new_unchecked(&store.conn, TransactionBehavior::Immediate)?;
+    crate::process::ensure_idle(store, agent)?;
     let previous = selection(store, agent)?;
     if previous
         .as_ref()
@@ -316,6 +317,7 @@ pub fn rollback(
     uuid(target)?;
     let agent = adapter.descriptor().id;
     let tx = Transaction::new_unchecked(&store.conn, TransactionBehavior::Immediate)?;
+    crate::process::ensure_idle(store, agent)?;
     let current = selection(store, agent)?.ok_or_else(|| {
         Error::new(
             "managed_config_missing",
@@ -369,7 +371,11 @@ pub fn launch_plan(
             "Selection changed",
         ));
     }
-    let source = mcp::prepare(store, &current.definition_id, None, adapter)?;
+    let source = if store.conn.is_autocommit() {
+        mcp::prepare(store, &current.definition_id, None, adapter)?
+    } else {
+        mcp::prepare_in_snapshot(store, &current.definition_id, None, adapter)?
+    };
     if source["definition_revision"] != current.definition_revision
         || source["mapping_revision"] != current.mapping_revision
     {

@@ -152,7 +152,7 @@ fn handle(
             if params.get("cursor").is_some() {
                 return Some(error(id, -32602, "This catalog is not paginated"));
             }
-            let tools: Vec<_>=service.available().into_iter().map(|o|json!({"name":o.tool,"description":o.description,"inputSchema":o.input_schema,"annotations":{"readOnlyHint":!o.writes,"destructiveHint":o.method=="entity.delete"||o.method=="entity.update"||o.method=="entity.resolve"||o.method=="entity.restore"||o.method=="deployment.apply"||o.method=="deployment.rollback"||o.execution,"idempotentHint":!o.writes,"openWorldHint":o.network||o.execution}})).collect();
+            let tools: Vec<_>=service.available().into_iter().map(|o|json!({"name":o.tool,"description":o.description,"inputSchema":o.input_schema,"annotations":{"readOnlyHint":!o.writes,"destructiveHint":o.method=="entity.delete"||o.method=="entity.update"||o.method=="entity.resolve"||o.method=="entity.restore"||o.method=="deployment.apply"||o.method=="deployment.rollback"||o.method=="process.stop"||o.method=="process.recover"||o.execution,"idempotentHint":!o.writes,"openWorldHint":o.network||o.execution}})).collect();
             Some(success(id, json!({"tools":tools})))
         }
         "tools/call" => {

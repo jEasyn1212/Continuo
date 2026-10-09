@@ -8,6 +8,15 @@ use serde_json::{json, Value};
 use std::{io::Read, path::PathBuf};
 
 fn main() {
+    if let Some(result) =
+        continuo_core::process::internal_entry(&std::env::args().skip(1).collect::<Vec<_>>())
+    {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let result = run();
     if let Err(error) = result {
         if std::env::args().any(|a| a == "mcp") {
@@ -21,7 +30,7 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("Continuo {}\n\ncontinuo [--data-dir PATH] status|agents|describe\ncontinuo [--data-dir PATH] call METHOD [--input FILE|-] [--allow-sync] [--allow-mcp-probes]\ncontinuo [--data-dir PATH] mcp [--allow-writes] [--allow-sync] [--allow-admin] [--allow-mcp-probes]\n\nInput is a JSON object; omitted input defaults to {{}}. All API responses are JSON.\nMCP defaults to read-only; --allow-sync and --allow-admin require --allow-writes.\nSecrets and existing agent configurations are not imported.", env!("CARGO_PKG_VERSION"));
+        println!("Continuo {}\n\ncontinuo [--data-dir PATH] status|agents|describe\ncontinuo [--data-dir PATH] call METHOD [--input FILE|-] [--allow-sync] [--allow-mcp-probes] [--allow-managed-processes]\ncontinuo [--data-dir PATH] mcp [--allow-writes] [--allow-sync] [--allow-admin] [--allow-mcp-probes] [--allow-managed-processes]\n\nInput is a JSON object; omitted input defaults to {{}}. All API responses are JSON.\nMCP defaults to read-only; --allow-sync and --allow-admin require --allow-writes.\nSecrets and existing agent configurations are not imported.", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let data_dir = take_value(&mut args, "--data-dir")?
@@ -31,6 +40,7 @@ fn run() -> Result<()> {
     let sync = take_flag(&mut args, "--allow-sync");
     let admin = take_flag(&mut args, "--allow-admin");
     let probes = take_flag(&mut args, "--allow-mcp-probes");
+    let processes = take_flag(&mut args, "--allow-managed-processes");
     let input = take_value(&mut args, "--input")?;
     let command = args.first().map(String::as_str).unwrap_or("");
     if command == "describe" {
@@ -73,6 +83,12 @@ fn run() -> Result<()> {
             "--allow-mcp-probes requires --allow-writes and --allow-admin",
         ));
     }
+    if processes && command == "mcp" && (!writes || !admin) {
+        return Err(Error::new(
+            "usage",
+            "--allow-managed-processes requires --allow-writes and --allow-admin",
+        ));
+    }
     let path = match data_dir {
         Some(path) => path,
         None => continuo_core::default_data_dir()?,
@@ -83,15 +99,17 @@ fn run() -> Result<()> {
             sync,
             admin,
             probes,
+            processes,
         }
     } else {
         Policy {
             sync,
             probes,
+            processes,
             ..Policy::local_user()
         }
     };
-    let service = Service::open(&path, policy)?;
+    let service = Service::open(&path, policy)?.with_simulator(std::env::current_exe()?);
     if command == "mcp" {
         return mcp::serve(&service);
     }

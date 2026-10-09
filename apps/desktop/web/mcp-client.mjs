@@ -8,6 +8,7 @@ export async function connectCore({
   sync,
   admin,
   probes,
+  processes,
 }) {
   if ((sync || admin) && !writes)
     throw new Error("--allow-sync and --allow-admin require --allow-writes");
@@ -15,11 +16,16 @@ export async function connectCore({
     throw new Error(
       "--allow-mcp-probes requires --allow-writes and --allow-admin",
     );
+  if (processes && (!writes || !admin))
+    throw new Error(
+      "--allow-managed-processes requires --allow-writes and --allow-admin",
+    );
   const args = dataDir ? ["--data-dir", dataDir, "mcp"] : ["mcp"];
   if (writes) args.push("--allow-writes");
   if (sync) args.push("--allow-sync");
   if (admin) args.push("--allow-admin");
   if (probes) args.push("--allow-mcp-probes");
+  if (processes) args.push("--allow-managed-processes");
   const child = spawn(binary, args, { stdio: ["pipe", "pipe", "pipe"] });
   let nextId = 0,
     buffer = "",

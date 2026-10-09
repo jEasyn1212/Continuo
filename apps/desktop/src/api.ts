@@ -52,6 +52,7 @@ export interface Connection {
     admin: boolean;
     sync: boolean;
     probes?: boolean;
+    processes?: boolean;
   };
   tools?: Tool[];
 }
@@ -67,7 +68,13 @@ export async function connect(): Promise<Connection> {
     }>("system.describe");
     return {
       mode: "app",
-      permissions: { writes: true, admin: true, sync: true, probes: true },
+      permissions: {
+        writes: true,
+        admin: true,
+        sync: true,
+        probes: true,
+        processes: false,
+      },
       tools: catalog.operations.map((op) => ({
         name: op.tool,
         description: op.description,
@@ -131,6 +138,16 @@ export async function call<T>(
   if (!result.ok) {
     const messages: Record<string, string> = {
       revision_conflict: "这条记录已在其他入口更新，请刷新后重新查看版本。",
+      process_busy: "当前 agent 存在尚未结束的受管运行，先停止或检查中断状态。",
+      process_revision_conflict: "运行状态或控制版本已变化，请刷新再操作。",
+      process_owner_present: "监管者仍持有锁，请请求停止，不能标记为中断。",
+      process_confirmation_required: "需要明确确认此次模拟运行或控制操作。",
+      process_run_exists: "运行 ID 已使用，先查看原结果；重试需新的 ID。",
+      deployment_revision_conflict: "本机配置选择已变化，请刷新并重新预览。",
+      deployment_plan_changed: "源定义或映射已变化，请重新预览配置。",
+      deployment_source_changed: "当前生成文件的源已变化，请重新预览并投递。",
+      managed_config_modified:
+        "生成文件在外部已被修改；保留文件并重新检查，不能覆盖或启动。",
       permission_denied: "当前入口未获授权执行这个操作。",
       invalid_path: "请输入这台设备上的绝对路径。",
       selection_conflict: "当前身份已被其他入口切换，请刷新后再选择。",
